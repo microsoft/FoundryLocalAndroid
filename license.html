@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>License Agreement</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f9f9f9;
+      color: #333;
+    }
+
+    header {
+      background: #004aad;
+      color: white;
+      text-align: center;
+      padding: 1.2rem;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 2rem auto;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+      padding: 1.5rem 2rem;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.5;
+      font-size: 0.95rem;
+      color: #222;
+    }
+
+    .loader {
+      text-align: center;
+      color: #666;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <header>License Agreement</header>
+  <main>
+    <pre id="license"><div class="loader">Loading license text...</div></pre>
+  </main>
+
+  <script>
+    // Fetch and display LICENSE content
+    fetch('LICENSE')
+      .then(response => {
+        if (!response.ok) throw new Error('Failed to load LICENSE');
+        return response.text();
+      })
+      .then(text => {
+        document.getElementById('license').textContent = text;
+      })
+      .catch(error => {
+        document.getElementById('license').textContent = '⚠️ Could not load LICENSE file.';
+        console.error(error);
+      });
+  </script>
+</body>
+</html>
