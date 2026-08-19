@@ -1,0 +1,79 @@
+name: Repository checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-boundary:
+    name: Verify public repository boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: gradle/actions/wrapper-validation@v4
+
+      - name: Verify source and binary boundary
+        shell: pwsh
+        run: |
+          $forbiddenDirectories = @(
+            "common",
+            "ipc-service",
+            "embedded-sdk",
+            "experimental",
+            "testing"
+          )
+          foreach ($directory in $forbiddenDirectories) {
+            if (Test-Path $directory) {
+              throw "Forbidden implementation directory is present: $directory"
+            }
+          }
+
+          $implementationSource = git ls-files | Where-Object {
+            $_ -match '\.(kt|java|aidl|c|cc|cpp|h|hpp)$' -and
+            $_ -notmatch '^examples/'
+          }
+          if ($implementationSource) {
+            throw "Implementation source outside examples is not allowed:`n$($implementationSource -join "`n")"
+          }
+
+          $binaries = git ls-files | Where-Object {
+            $_ -match '\.(aar|apk|aab|so|dll|dylib|zip|a|o|bin|onnx|gguf|safetensors|jar)$' -and
+            $_ -ne 'gradle/wrapper/gradle-wrapper.jar'
+          }
+          if ($binaries) {
+            throw "Committed binaries are not allowed:`n$($binaries -join "`n")"
+          }
+
+          $oversized = git ls-tree -r -l --full-tree HEAD | ForEach-Object {
+            if ($_ -match '^\d+\s+\w+\s+[0-9a-f]+\s+(\d+)\s+(.+)$') {
+              [pscustomobject]@{
+                Size = [long]$Matches[1]
+                Path = $Matches[2]
+              }
+            }
+          } | Where-Object {
+            $_.Size -gt 5MB
+          } | Select-Object -ExpandProperty Path
+          if ($oversized) {
+            throw "Tracked files larger than 5 MB require explicit review:`n$($oversized -join "`n")"
+          }
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: microsoft
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Verify Gradle project configuration
+        run: ./gradlew projects --no-daemon --quiet
