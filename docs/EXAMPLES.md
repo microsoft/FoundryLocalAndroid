@@ -1,365 +1,305 @@
-# Foundry Local Android - Code Examples
+# Examples
 
-Complete, runnable code examples for integrating Foundry Local into your Android application.
+Foundry Local uses the same coroutine-based model and inference APIs in IPC and embedded modes.
 
-> **📱 Example Apps**: See the [examples/](../examples/) directory for standalone apps:
-> - [ChatApp](../examples/ChatApp) — Polished chat with optional voice input
-> - [AudioTranscriptionApp](../examples/AudioTranscriptionApp) — File and real-time audio transcription
-> - [ApiExplorerApp](../examples/ApiExplorerApp) — Interactive SDK API reference and lifecycle demo
->
-> If these app directories are not present in your checkout yet, update to the latest release tag or the `main` branch.
->
-> E2E tests live separately in [testing/ipc-e2e/](../testing/ipc-e2e/) (`:ExampleApp` module).
+> **Preview:** Foundry Local for Android is under active development. The API surface and supported
+> capabilities continue to grow and may change between preview releases. Pin the AAR version used by
+> your app and review the release notes before upgrading.
 
-## Table of Contents
+The selected release AAR determines where inference runs. The examples below import only
+`com.microsoft.foundrylocal.api.*`.
 
-- [Basic Examples](#basic-examples)
-  - [Minimal Integration](#minimal-integration)
-  - [Simple Chat](#simple-chat)
-  - [Streaming Chat](#streaming-chat)
+## Runnable sample apps
 
----
+The repository includes complete applications that use the shared API:
 
-## Basic Examples
+### IPC mode
 
-### Minimal Integration
+- [ApiExplorerAppIPC](../examples/ipc/ApiExplorerAppIPC) — connection, catalog, model download and
+  cancellation, load and unload, chat, streaming, reconnection, and cache removal
 
-The simplest possible integration - connect, get a model, and run inference.
+### Embedded mode
+
+- [ChatAppEmbedded](../examples/embedded/ChatAppEmbedded) — chat, streaming responses, and live voice input
+- [AudioTranscriptionAppEmbedded](../examples/embedded/AudioTranscriptionAppEmbedded) — file, streaming,
+  and live audio transcription
+
+Use the sample application closest to your feature, then refer to the focused recipes below.
+
+## Initialize Foundry Local
 
 ```kotlin
-import com.microsoft.foundrylocal.FoundryLocalManager
-import com.microsoft.foundrylocal.FoundryChatCompletionClient
-import com.microsoft.foundrylocal.IFoundryLocalManager
-import com.microsoft.foundrylocal.datamodels.Configuration
-import com.microsoft.foundrylocal.datamodels.chat.ChatCompletionRequest
-import com.microsoft.foundrylocal.datamodels.chat.ChatMessage
-import com.microsoft.foundrylocal.callbacks.FoundryServiceConnectionCallback
-import com.microsoft.foundrylocal.callbacks.FoundryOperationProgressCallback
-import kotlinx.coroutines.*
+import android.content.Context
+import com.microsoft.foundrylocal.api.Configuration
+import com.microsoft.foundrylocal.api.FoundryLocalManager
 
-class MinimalExample : AppCompatActivity() {
-    private lateinit var manager: FoundryLocalManager
-    
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        
-        // Initialize
-        val options = Configuration(appName = "MinimalApp")
-        manager = FoundryLocalManager(options)
-        
-        // Connect
-        manager.connect(this, object : FoundryServiceConnectionCallback {
-            override fun onServiceConnected(service: IFoundryLocalManager) {
-                runInference()
-            }
-            
-            override fun onServiceDisconnected(
-                errorCode: FoundryServiceConnectionCallback.ErrorCode, 
-                message: String?
-            ) {
-                Log.e(TAG, "Disconnected: ${message ?: "unknown"}")
+suspend fun createManager(context: Context): FoundryLocalManager {
+    return FoundryLocalManager.create(
+        context = context,
+        config = Configuration(appName = "MyApp")
+    )
+}
+```
+
+IPC callers can also observe connection loss:
+
+```kotlin
+suspend fun createIpcManager(context: Context): FoundryLocalManager {
+    return FoundryLocalManager.create(
+        context = context,
+        config = Configuration(appName = "MyApp"),
+        onDisconnected = {
+            mainHandler.post { showReconnectAction() }
+        }
+    )
+}
+```
+
+Embedded mode does not invoke `onDisconnected`.
+
+## Get the model selected by your app
+
+Pass the selected catalog alias into the model lifecycle:
+
+```kotlin
+suspend fun getSelectedModel(
+    manager: FoundryLocalManager,
+    modelAlias: String
+): Model {
+    return manager.getCatalog().getModel(modelAlias)
+}
+```
+
+## Download with progress
+
+```kotlin
+suspend fun downloadModel(model: Model) {
+    if (!model.isCached()) {
+        model.download(progress = { progress ->
+            viewModelScope.launch(Dispatchers.Main) {
+                progressBar.progress = progress.toInt()
             }
         })
-    }
-    
-    private fun runInference() {
-        lifecycleScope.launch(Dispatchers.Default) {
-            // Get model
-            val catalog = manager.getCatalog().data
-            val model = catalog?.getModel("phi-3-mini-4k")?.data
-            
-            // Ensure model is loaded
-            if (model?.isLoaded()?.data != true) {
-                model?.load(object : FoundryOperationProgressCallback {
-                    override fun onProgressUpdate(
-                        operationType: FoundryOperationProgressCallback.OperationType,
-                        modelAlias: String,
-                        status: FoundryOperationProgressCallback.OperationStatus,
-                        progressPercent: Int,
-                        message: String?
-                    ) {}
-                    
-                    override fun onOperationComplete(
-                        operationType: FoundryOperationProgressCallback.OperationType,
-                        modelAlias: String,
-                        successful: Boolean,
-                        errorMessage: String?
-                    ) {
-                        if (successful) performChat(model)
-                    }
-                })
-            } else {
-                performChat(model)
-            }
-        }
-    }
-    
-    private fun performChat(model: FoundryModel) {
-        lifecycleScope.launch(Dispatchers.Default) {
-            val chatClient = model.createChatCompletionClient().data
-            
-            val request = ChatCompletionRequest().apply {
-                messages.add(ChatMessage(ChatMessage.Role.USER, "Hello!"))
-            }
-            
-            val response = chatClient?.completeChat(request)?.data?.message?.content
-            
-            withContext(Dispatchers.Main) {
-                Log.d(TAG, "Response: $response")
-            }
-        }
-    }
-    
-    override fun onDestroy() {
-        super.onDestroy()
-        manager.disconnect(this)
-    }
-    
-    companion object {
-        private const val TAG = "MinimalExample"
     }
 }
 ```
 
----
+Run the download in a lifecycle-owned coroutine. Cancel that coroutine to cancel the download.
 
-### Simple Chat
-
-Basic chat with a single question and response.
+## Load and create a chat client
 
 ```kotlin
-class ChatActivity : AppCompatActivity() {
-    private lateinit var manager: FoundryLocalManager
-    
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        
-        val options = Configuration(appName = "ChatApp")
-        manager = FoundryLocalManager(options)
-        
-        manager.connect(this, object : FoundryServiceConnectionCallback {
-            override fun onServiceConnected(service: IFoundryLocalManager) {
-                askQuestion("What is the capital of France?")
-            }
-            
-            override fun onServiceDisconnected(
-                errorCode: FoundryServiceConnectionCallback.ErrorCode, 
-                message: String?
-            ) {
-                Toast.makeText(
-                    this@ChatActivity, 
-                    "Service disconnected", 
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        })
+suspend fun createChatClient(model: Model): ChatClient {
+    if (!model.isLoaded()) {
+        model.load()
     }
-    
-    private fun askQuestion(question: String) {
-        lifecycleScope.launch(Dispatchers.Default) {
-            val catalog = manager.getCatalog().data
-            val model = catalog?.getModel("phi-3-mini-4k")?.data
-            
-            // Load if needed
-            if (model?.isLoaded()?.data != true) {
-                model?.load(object : FoundryOperationProgressCallback {
-                    override fun onProgressUpdate(
-                        operationType: FoundryOperationProgressCallback.OperationType,
-                        modelAlias: String,
-                        status: FoundryOperationProgressCallback.OperationStatus,
-                        progressPercent: Int,
-                        message: String?
-                    ) {
-                        Log.d(TAG, "Loading: $progressPercent%")
-                    }
-                    
-                    override fun onOperationComplete(
-                        operationType: FoundryOperationProgressCallback.OperationType,
-                        modelAlias: String,
-                        successful: Boolean,
-                        errorMessage: String?
-                    ) {
-                        if (successful) {
-                            sendMessage(model, question)
-                        } else {
-                            Log.e(TAG, "Load failed: $errorMessage")
-                        }
-                    }
-                })
-            } else {
-                sendMessage(model, question)
-            }
-        }
-    }
-    
-    private fun sendMessage(model: FoundryModel, message: String) {
-        lifecycleScope.launch(Dispatchers.Default) {
-            val chatClient = model.createChatCompletionClient().data
-            
-            val request = ChatCompletionRequest().apply {
-                messages.add(ChatMessage(ChatMessage.Role.USER, message))
-                temperature = 0.7f
-                maxTokens = 150
-            }
-            
-            val response = chatClient?.completeChat(request)?.data?.message?.content
-            
-            withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    this@ChatActivity,
-                    response,
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
-    
-    override fun onDestroy() {
-        super.onDestroy()
-        manager.disconnect(this)
-    }
-    
-    companion object {
-        private const val TAG = "ChatActivity"
-    }
+
+    return model.createChatClient()
 }
 ```
 
----
+Create the client once and reuse it until the model is unloaded or an IPC connection is replaced.
 
-### Streaming Chat
-
-Chat with streaming token-by-token responses.
+## Complete a chat request
 
 ```kotlin
-class StreamingChatActivity : AppCompatActivity() {
-    private lateinit var manager: FoundryLocalManager
-    private var chatClient: FoundryChatCompletionClient? = null
-    private lateinit var responseTextView: TextView
-    
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_streaming_chat)
-        
-        responseTextView = findViewById(R.id.responseText)
-        
-        val options = Configuration(appName = "StreamingChatApp")
-        manager = FoundryLocalManager(options)
-        
-        manager.connect(this, object : FoundryServiceConnectionCallback {
-            override fun onServiceConnected(service: IFoundryLocalManager) {
-                initializeModel()
-            }
-            
-            override fun onServiceDisconnected(
-                errorCode: FoundryServiceConnectionCallback.ErrorCode, 
-                message: String?
-            ) {
-                Log.e(TAG, "Disconnected: ${message ?: "unknown"}")
-            }
-        })
-        
-        findViewById<Button>(R.id.sendButton).setOnClickListener {
-            val input = findViewById<EditText>(R.id.inputText).text.toString()
-            if (input.isNotEmpty()) {
-                streamResponse(input)
-            }
-        }
-    }
-    
-    private fun initializeModel() {
-        lifecycleScope.launch(Dispatchers.Default) {
-            val catalog = manager.getCatalog().data
-            val model = catalog?.getModel("phi-3-mini-4k")?.data
-            
-            if (model?.isLoaded()?.data != true) {
-                model?.load(object : FoundryOperationProgressCallback {
-                    override fun onProgressUpdate(
-                        operationType: FoundryOperationProgressCallback.OperationType,
-                        modelAlias: String,
-                        status: FoundryOperationProgressCallback.OperationStatus,
-                        progressPercent: Int,
-                        message: String?
-                    ) {}
-                    
-                    override fun onOperationComplete(
-                        operationType: FoundryOperationProgressCallback.OperationType,
-                        modelAlias: String,
-                        successful: Boolean,
-                        errorMessage: String?
-                    ) {
-                        if (successful) {
-                            chatClient = model.createChatCompletionClient().data
-                        }
-                    }
-                })
-            } else {
-                chatClient = model.createChatCompletionClient().data
-            }
-        }
-    }
-    
-    private fun streamResponse(userMessage: String) {
-        val request = ChatCompletionRequest().apply {
-            messages.add(ChatMessage(ChatMessage.Role.USER, userMessage))
-            temperature = 0.8f
-            maxTokens = 200
-        }
-        
-        val responseBuilder = StringBuilder()
-        
-        chatClient?.completeChatStreaming(request, 
-            object : IFoundryOperationProgressCallback.Stub() {
-                override fun onProgressUpdate(
-                    operationType: Int,
-                    modelAlias: String,
-                    status: Int,
-                    progressPercent: Int,
-                    message: String
-                ) {
-                    responseBuilder.append(message)
-                    runOnUiThread {
-                        responseTextView.text = responseBuilder.toString()
-                    }
-                }
-                
-                override fun onOperationComplete(
-                    operationType: Int,
-                    modelAlias: String,
-                    successful: Boolean,
-                    errorMessage: String?
-                ) {
-                    if (successful) {
-                        Log.d(TAG, "Streaming completed")
-                    } else {
-                        runOnUiThread {
-                            Toast.makeText(
-                                this@StreamingChatActivity,
-                                "Error: $errorMessage",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    }
-                }
-            }
+import com.microsoft.foundrylocal.api.ChatCompletionRequest
+import com.microsoft.foundrylocal.api.ChatMessage
+
+suspend fun completeChat(chatClient: ChatClient): String {
+    val response = chatClient.completeChat(
+        ChatCompletionRequest(
+            messages = listOf(
+                ChatMessage.system("Answer in one sentence."),
+                ChatMessage.user("What is on-device inference?")
+            )
         )
-    }
-    
-    override fun onDestroy() {
-        super.onDestroy()
-        manager.disconnect(this)
-    }
-    
-    companion object {
-        private const val TAG = "StreamingChatActivity"
+    )
+
+    return response.message?.content.orEmpty()
+}
+```
+
+## Stream a chat response
+
+```kotlin
+val streamingJob = viewModelScope.launch(Dispatchers.IO) {
+    chatClient.completeChatStreaming(request).collect { chunk ->
+        withContext(Dispatchers.Main) {
+            appendAnswer(chunk.delta)
+        }
     }
 }
 ```
----
 
-## See Also
+Stop generation by cancelling the collecting job:
 
-- [Integration Guide](INTEGRATION_GUIDE.md) - Quick start guide
-- [API Reference](API_REFERENCE.md) - Complete API documentation
-- [Best Practices](BEST_PRACTICES.md) - Development guidelines
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
+```kotlin
+streamingJob.cancel()
+```
+
+## Maintain conversation history
+
+```kotlin
+val conversation = mutableListOf<ChatMessage>()
+
+suspend fun sendMessage(text: String): String {
+    conversation += ChatMessage.user(text)
+
+    val response = chatClient.completeChat(
+        ChatCompletionRequest(messages = conversation)
+    )
+
+    val assistant = response.message
+        ?: error("The model returned no message")
+
+    conversation += assistant
+    return assistant.content
+}
+```
+
+Trim older turns according to the selected model's context limits.
+
+## Handle errors and cancellation
+
+```kotlin
+suspend fun loadModel(model: Model) {
+    try {
+        model.load()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: FoundryLocalException) {
+        Log.e(TAG, "Model load failed: code=${error.errorCode}", error)
+        showError(error.message ?: "Model load failed")
+    }
+}
+```
+
+Do not log prompts, responses, transcripts, or raw audio.
+
+## Reconnect in IPC mode
+
+```kotlin
+suspend fun reconnect(savedAlias: String) {
+    manager.reconnect()
+
+    val catalog = manager.getCatalog()
+    val model = catalog.getModel(savedAlias)
+
+    if (model.isLoaded()) {
+        chatClient = model.createChatClient()
+    }
+}
+```
+
+Reacquire all catalog, model, chat, and audio handles after reconnecting. Handles created before the
+disconnection may be stale.
+
+## Transcribe an audio file
+
+```kotlin
+import com.microsoft.foundrylocal.api.AudioTranscriptionRequest
+
+suspend fun transcribeAudio(
+    catalog: Catalog,
+    modelAlias: String,
+    audioFile: File
+): String {
+    val audioModel = catalog.getModel(modelAlias)
+    if (!audioModel.isCached()) {
+        audioModel.download()
+    }
+    if (!audioModel.isLoaded()) {
+        audioModel.load()
+    }
+
+    val audioClient = audioModel.createAudioClient()
+    val transcription = audioClient.transcribe(
+        AudioTranscriptionRequest(filePath = audioFile.absolutePath)
+    )
+
+    return transcription.text
+}
+```
+
+The calling app must be able to read the file. In IPC mode, the SDK opens it and passes a file
+descriptor to the service.
+
+## Stream file transcription
+
+```kotlin
+suspend fun streamTranscription(audioClient: AudioClient, audioFile: File) {
+    audioClient.transcribeStreaming(
+        AudioTranscriptionRequest(filePath = audioFile.absolutePath)
+    ).collect { event ->
+        updateTranscript(event.text, event.isFinal)
+    }
+}
+```
+
+Cancel the collecting coroutine to stop the operation.
+
+## Transcribe live audio
+
+```kotlin
+class LiveTranscriber private constructor(
+    private val session: AudioStreamSession
+) {
+    suspend fun push(audioBytes: ByteArray): AudioStreamResult {
+        return session.pushAudioChunk(audioBytes)
+    }
+
+    suspend fun stop(): AudioStreamResult {
+        return session.stop()
+    }
+
+    companion object {
+        suspend fun start(audioClient: AudioClient): LiveTranscriber {
+            val session = audioClient.createStreamSession(
+                AudioStreamSettings(
+                    sampleRate = 16000,
+                    channels = 1,
+                    bitsPerSample = 16
+                )
+            )
+            return LiveTranscriber(session)
+        }
+    }
+}
+```
+
+Call `LiveTranscriber.start(...)` once when capture begins, call `push(...)` for each microphone
+buffer, and call `stop()` once when capture ends. Audio chunks must match the session settings.
+
+## Release resources
+
+Cancel active jobs before unloading their models:
+
+```kotlin
+suspend fun releaseResources(
+    manager: FoundryLocalManager,
+    model: Model,
+    audioModel: Model,
+    streamingJob: Job?
+) {
+    streamingJob?.cancelAndJoin()
+
+    if (model.isLoaded()) {
+        model.unload()
+    }
+    if (audioModel.isLoaded()) {
+        audioModel.unload()
+    }
+
+    manager.close()
+}
+```
+
+Run suspend cleanup in a coroutine and do not use the manager after closing it.
+
+## See also
+
+- [Integration Guide](INTEGRATION_GUIDE.md)
+- [API Reference](API_REFERENCE.md)
+- [Best Practices](BEST_PRACTICES.md)
+- [Troubleshooting](TROUBLESHOOTING.md)

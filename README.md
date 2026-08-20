@@ -2,13 +2,12 @@
   <img alt="Foundry Local Android" src="assets/ic_launcher.png" height="100">
 
   <h1>Foundry Local for Android</h1>
-  <p><strong>Run generative AI models directly on Android devices — no cloud, no cost per request, fully private.</strong></p>
+  <p><strong>Run generative AI models directly on Android devices.</strong></p>
 
   <p>
     <a href="#quick-start">Quick Start</a> •
     <a href="#examples">Examples</a> •
-    <a href="#documentation">Docs</a> •
-    <a href="#contributing">Contributing</a>
+    <a href="#documentation">Docs</a>
   </p>
 </div>
 
@@ -17,68 +16,96 @@
 ## Quick Start
 
 ```kotlin
-// Inside a CoroutineScope (e.g., viewModelScope, lifecycleScope)
-val config = Configuration(appName = "my-app")
-val manager = FoundryLocalManager.create(context, config)
+suspend fun runChat(context: Context, modelAlias: String) {
+    val config = Configuration(appName = "my-app")
+    val manager = FoundryLocalManager.create(context, config)
 
-val catalog = manager.getCatalog()
-val model = catalog.getModel("phi-4-mini")
-model.download { progress -> Log.d("DL", "$progress%") }
-model.load()
+    val model = manager.getCatalog().getModel(modelAlias)
+    model.download(progress = { progress -> Log.d("DL", "$progress%") })
+    model.load()
 
-val chat = model.createChatClient()
-chat.completeChatStreaming(
-    ChatCompletionRequest(messages = listOf(ChatMessage.user("Hello!")))
-).collect { chunk ->
-    print(chunk.delta)
+    val chat = model.createChatClient()
+    chat.completeChatStreaming(
+        ChatCompletionRequest(messages = listOf(ChatMessage.user("Hello!")))
+    ).collect { chunk ->
+        print(chunk.delta)
+    }
 }
 ```
 
-That's it — model downloaded, loaded, and generating text on-device.
+The application supplies `modelAlias` from its model selection or configuration.
 
-> **💻 Running on Windows or macOS?** See [Foundry Local](https://github.com/microsoft/Foundry-Local).
+> **Running on Windows or macOS?** See [Foundry Local](https://github.com/microsoft/Foundry-Local).
 
 ---
 
 ## How It Works
 
-Foundry Local runs AI models entirely on-device. You choose where inference happens:
+Foundry Local runs AI models on the Android device. Choose one deployment mode:
 
-- **IPC mode** — Your app includes a thin SDK library (no native code). Inference runs in the Foundry Local service app, a separate process. This mode keeps your APK small and enables model sharing across apps, provided the [Foundry Local App](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app) has been downloaded. Preferred if you have strict APK size limitations.
-- **Embedded mode** — Your app bundles the full inference engine including native libraries. No Foundry Local service app needed. Fully self-contained. Preferred if your app must work without depending on other installed apps.
+- **IPC mode** — Your app includes a client AAR with no native inference engine. Inference runs in
+  the Foundry Local service app, a separate process. This keeps the app package smaller but requires
+  the [Foundry Local App](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app).
+  Each client app has an isolated model copy.
+- **Embedded mode** — Your app includes an AAR that packages the inference engine and native
+  libraries. It requires no service app, increases the application package size, and runs inference
+  in your app process.
 
-> **Good to know:** Both modes share the same API. The code above works identically regardless of which mode you choose. Only initialization differs.
+Both modes expose the same Kotlin API. Their installation, packaging, process, storage, and lifecycle
+behavior differ.
 
 ---
 
 ## Setup
 
+Foundry Local distributes each deployment mode as a separate AAR. Add exactly one to your
+application.
+
 ### IPC Mode
 
-1. Add the SDK AAR to your project's `libs/` folder
-2. Add the dependency:
+1. Download `foundry-local-ipc-sdk-<version>.aar` from the matching release.
+2. Place it in your app module's `libs/` directory.
+3. Add the required dependencies:
 
-```kotlin
-// build.gradle.kts
-dependencies {
-    implementation(fileTree("libs") { include("*.aar") })
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-}
-```
+   ```kotlin
+   // app/build.gradle.kts
+   dependencies {
+       implementation(files("libs/foundry-local-ipc-sdk-<version>.aar"))
+       implementation("androidx.core:core-ktx:1.12.0")
+       implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:<coroutines-version>")
+   }
+   ```
 
-3. Add `INTERNET` permission to your `AndroidManifest.xml` (required for model downloads):
+   AndroidX Core supplies the notification and foreground-service classes used during model
+   downloads; those classes are not packaged in the IPC AAR.
 
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
+4. Add internet permission for catalog access and model downloads:
 
-4. Install the [Foundry Local App](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app) on the device
+   ```xml
+   <uses-permission android:name="android.permission.INTERNET" />
+   ```
+
+5. Install the
+   [Foundry Local App](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app)
+   on the device.
 
 ### Embedded Mode
 
-1. Add the embedded SDK AAR to your project's `libs/` folder
-2. Add the dependency and `INTERNET` permission (same as above)
-3. No service app needed — inference runs in your process
+1. Download `foundry-local-embedded-sdk-<version>.aar` from the matching release.
+2. Place it in your app module's `libs/` directory.
+3. Add the dependency:
+
+   ```kotlin
+   // app/build.gradle.kts
+   dependencies {
+       implementation(files("libs/foundry-local-embedded-sdk-<version>.aar"))
+       implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:<coroutines-version>")
+   }
+   ```
+
+4. Add the same internet permission used for catalog access and model downloads.
+
+No service app is required. Inference runs in your application process.
 
 For detailed setup instructions, see the [Integration Guide](docs/INTEGRATION_GUIDE.md).
 
@@ -86,64 +113,73 @@ For detailed setup instructions, see the [Integration Guide](docs/INTEGRATION_GU
 
 ## Features
 
-- **Chat completions** with streaming support
-- **Audio transcription** — batch (Whisper) and real-time (Nemotron)
-- **Multi-turn conversations** with history
-- **Model management** — download, load, unload, cache control
-- **Progress tracking** for downloads
-- **Configurable inference** — temperature, top-k, top-p, max tokens
+- Chat completions with streaming support
+- Audio transcription for files and live audio
+- Multi-turn conversations
+- Model download, load, unload, and cache management
+- Download progress and coroutine cancellation
+- Optional chat request controls, including temperature, top-k, top-p, and maximum tokens
 
 ---
 
 ## Examples
 
-| App | Description |
-|-----|-------------|
-| [ApiExplorer2App](examples/ApiExplorer2App/) | Full SDK lifecycle using modern API — connect, catalog, download, load, chat, cleanup |
-| [ChatApp](examples/ChatApp/) | Chat UI with optional voice input (speak-to-chat via Nemotron) |
-| [AudioTranscriptionApp](examples/AudioTranscriptionApp/) | Batch transcription (Whisper) and real-time mic transcription (Nemotron) |
-| [EmbeddedChatApp](examples/EmbeddedChatApp/) | Chat with voice input using embedded mode — no service app needed |
-| [ApiExplorerApp](examples/ApiExplorerApp/) *(deprecated)* | Legacy callback-based SDK lifecycle demo |
+### IPC mode
 
-Each app is self-contained. See the [examples README](examples/README.md) for setup instructions.
+- [ApiExplorerAppIPC](examples/ipc/ApiExplorerAppIPC/) — connection, catalog, model lifecycle, chat,
+  streaming, reconnection, and cache removal using the shared API
+
+### Embedded mode
+
+- [ChatAppEmbedded](examples/embedded/ChatAppEmbedded/) — chat, streaming responses, and live voice input
+- [AudioTranscriptionAppEmbedded](examples/embedded/AudioTranscriptionAppEmbedded/) — file, streaming, and
+  live audio transcription
+
+See the [Examples guide](docs/EXAMPLES.md) for focused code recipes.
 
 ---
 
 ## Documentation
 
 - **[Integration Guide](docs/INTEGRATION_GUIDE.md)** — Step-by-step setup and first inference
-- **[API Reference](docs/API_REFERENCE.md)** — Complete class and method documentation
-- **[IPC vs Embedded](docs/IPC_VS_EMBEDDED.md)** — Choosing a deployment mode
-- **[Best Practices](docs/BEST_PRACTICES.md)** — Error handling, lifecycle, performance
-- **[Troubleshooting](docs/TROUBLESHOOTING.md)** — Common issues and solutions
+- **[API Reference](docs/API_REFERENCE.md)** — Classes, methods, and data types
+- **[Examples](docs/EXAMPLES.md)** — Shared-API recipes and runnable samples
+- **[IPC and embedded deployment modes](docs/IPC_AND_EMBEDDED_MODES.md)** — Compare how each mode
+  operates
+- **[Best Practices](docs/BEST_PRACTICES.md)** — Coroutines, lifecycle, memory, and cleanup
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** — Common integration and runtime problems
 
 ---
 
-## Building from Source
+## Get the SDK
 
-```bash
-# Build everything
-./gradlew assembleDebug -PskipCertSecurityCheck=true
+Download the versioned AAR for your deployment mode from
+[GitHub Releases](https://github.com/microsoft/FoundryLocalAndroid/releases):
 
-# Run unit tests
-./gradlew testDebugUnitTest -PskipCertSecurityCheck=true
-```
+- `foundry-local-ipc-sdk-<version>.aar`
+- `foundry-local-embedded-sdk-<version>.aar`
 
-> **Good to know:** The `-PskipCertSecurityCheck=true` flag bypasses caller certificate verification for local development. Production builds use a caller allowlist for security.
+Verify the artifact SHA-256 published with the release before adding it to your application.
 
 ---
 
-## Contributing
+## Licensing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+The repository's MIT license covers its documentation, sample applications, and repository tooling.
+The SDK AARs are distributed under the license and notices included with those artifacts and are not
+granted under the repository's MIT license.
 
 ---
 
 ## Data Collection
 
-The software may collect information about you and your use of the software and send it to Microsoft. Microsoft may use this information to provide services and improve our products and services. You may turn off the telemetry as described in the repository. There are also some features in the software that may enable you and Microsoft to collect data from users of your applications. If you use these features, you must comply with applicable law, including providing appropriate notices to users of your applications together with a copy of Microsoft's privacy statement. Our privacy statement is located at https://go.microsoft.com/fwlink/?LinkID=824704. You can learn more about data collection and use in the help documentation and our privacy statement. Your use of the software operates as your consent to these practices.
-
-### How to Disable Telemetry
+The software may collect information about you and your use of the software and send it to Microsoft.
+Microsoft may use this information to provide services and improve our products and services. You may
+turn off the telemetry as described below. There are also some features in the software that may
+enable you and Microsoft to collect data from users of your applications. If you use these features,
+you must comply with applicable law, including providing appropriate notices to users of your
+applications together with a copy of Microsoft's privacy statement. Our privacy statement is
+available at [Microsoft Privacy Statement](https://go.microsoft.com/fwlink/?LinkID=824704).
 
 ```kotlin
 val config = Configuration(appName = "my-app", disableTelemetry = true)
@@ -153,4 +189,9 @@ val config = Configuration(appName = "my-app", disableTelemetry = true)
 
 ## Trademarks
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos are subject to those third-party's policies.
+This project may contain trademarks or logos for projects, products, or services. Authorized use of
+Microsoft trademarks or logos is subject to and must follow
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
+Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion
+or imply Microsoft sponsorship. Third-party trademarks and logos are subject to their respective
+policies.

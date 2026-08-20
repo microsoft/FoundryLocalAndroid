@@ -1,6 +1,6 @@
 # Foundry Local for Android — Example Apps
 
-Standalone example apps demonstrating different capabilities of the Foundry Local Android SDK. Each app is a self-contained Gradle project that consumes the SDK via the fat AAR.
+Standalone example apps demonstrating different capabilities of the Foundry Local Android SDK. Each app is a self-contained Gradle project that consumes a distributed SDK AAR.
 
 ## Apps
 
@@ -8,39 +8,38 @@ Standalone example apps demonstrating different capabilities of the Foundry Loca
 
 | App | Description | Key SDK Features |
 |-----|-------------|-----------------|
-| [ApiExplorer2App](ApiExplorer2App/) | Interactive SDK API reference (modern API) | Full lifecycle: connect, catalog, download, load, chat, unload, cache management |
-| [ChatApp](ChatApp/) | Polished chat interface with optional voice input | Chat completion (sync + streaming), real-time audio transcription for speak-to-chat |
-| [AudioTranscriptionApp](AudioTranscriptionApp/) | File and real-time audio transcription | Whisper batch transcription, Nemotron streaming transcription, push-stream audio |
-| [EmbeddedChatApp](EmbeddedChatApp/) | Chat with voice input using embedded mode ([setup](EmbeddedChatApp/README.md#prerequisites)) | In-process inference, no service app needed, streaming audio transcription |
-| [ApiExplorerApp](ApiExplorerApp/) *(deprecated)* | Interactive SDK API reference (legacy API) | Callback-based lifecycle demo — will be removed in a future release |
+| [ApiExplorerAppIPC](ipc/ApiExplorerAppIPC/) | Interactive SDK API reference (modern API) | Full lifecycle: connect, catalog, download, load, chat, unload, cache management |
+| [ChatAppEmbedded](embedded/ChatAppEmbedded/) | Chat with voice input using embedded mode ([setup](embedded/ChatAppEmbedded/README.md#prerequisites)) | In-process inference, no service app needed, streaming audio transcription |
+| [AudioTranscriptionAppEmbedded](embedded/AudioTranscriptionAppEmbedded/) | Audio transcription using embedded mode | In-process audio transcription, no service app needed |
 
 ## Getting Started
 
-All example apps follow the same setup pattern:
+Run all commands from the repository root.
 
-### Prerequisites
+### IPC examples
 
-1. **FoundryLocal service app** installed on device:
-   ```bash
-   # From the repo root
-   ./gradlew :FoundryLocalApp:installDebug
-   ```
+1. Install the [Foundry Local service app from Google Play](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app).
+2. Download `foundry-local-ipc-sdk-<version>.aar` from the matching GitHub Release, verify its
+   published SHA-256 hash, and place it in the example's `libs/` directory.
 
-2. **Fat AAR** built and copied to the app's `libs/` directory:
-   ```bash
-   ./gradlew :FoundryLocalIPCSDK:createFatAarDebug
-   mkdir -p examples/<AppName>/libs
-   cp ipc-service/FoundryLocalIPCSDK/build/outputs/aar/FoundryLocalIPCSDK-debug-fat.aar examples/<AppName>/libs/
-   ```
+### Embedded examples
 
-### Build & Install
+1. Download `foundry-local-embedded-sdk-<version>.aar` from the matching GitHub Release, verify its
+   published SHA-256 hash, and place it in the example's `libs/` directory. No service app is required.
+
+Release AARs are published as GitHub Release assets and are not committed to the public repository.
+Public CI downloads, verifies, and temporarily injects them into each sample's `libs/` directory.
+
+See the [Integration Guide](../docs/INTEGRATION_GUIDE.md#prerequisites) for SDK distribution and setup details.
+
+### Build and install
+
+Invoke the app's Gradle module (`<ModuleName>` is the app name, such as
+`ApiExplorerAppIPC`):
 
 ```bash
-cd examples/<AppName>
-./gradlew installDebug
+./gradlew :<ModuleName>:installDebug
 ```
-
-> **⚠️ Warning:** For local development, you may need to add `-PskipCertSecurityCheck=true` to the `./gradlew` commands above. This flag disables certificate verification and **must only be used for local development builds**. Never use it in production, CI, or distributable builds.
 
 ## Architecture
 
@@ -51,7 +50,3 @@ Each app is designed for modularity and reuse:
 - **Connection helper** — isolated service binding logic, swappable connection implementation
 
 This structure makes it straightforward to lift individual features into a consolidated Gallery App.
-
-## E2E Testing
-
-E2E tests live separately in [`testing/ipc-e2e/`](../testing/ipc-e2e/) (Gradle module `:ExampleApp`). These tests exercise the SDK directly and do not depend on any example app UI. See the [testing README](../testing/ipc-e2e/README.md) for details.

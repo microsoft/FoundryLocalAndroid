@@ -1,314 +1,253 @@
-# Foundry Local Android - Troubleshooting
+# Troubleshooting
 
-Common issues and solutions when working with Foundry Local SDKs.
+Foundry Local reports shared-API failures through `FoundryLocalException`. Start with the operation
+that failed, confirm the selected deployment mode, and preserve the exception message and error code
+in diagnostic logs.
 
-## Table of Contents
+## Manager creation fails
 
-- [Connection Issues](#connection-issues)
-- [Model Loading Errors](#model-loading-errors)
-- [Chat Completion Issues](#chat-completion-issues)
-- [Performance Problems](#performance-problems)
-- [Embedded SDK Issues](#embedded-sdk-issues)
+### "No Foundry Local SDK implementation found"
 
----
+The application did not package a supported implementation.
 
-## Connection Issues
+1. Confirm that exactly one release AAR is in the app module's `libs/` directory.
+2. Confirm the Gradle dependency points to that exact filename.
+3. Remove stale AARs from previous builds.
+4. Clean and rebuild the application.
 
-### Service Connection Fails Immediately
+Use one of:
 
-**Symptoms:**
-- `connect()` returns `false`
-- `onServiceDisconnected()` called immediately
-- Error message: "Service not found"
+```text
+foundry-local-ipc-sdk-<version>.aar
+foundry-local-embedded-sdk-<version>.aar
+```
 
-**Solutions:**
+Do not package both unless the release explicitly supports that configuration.
 
-1. **Verify Foundry Local App is installed**
-   ```kotlin
-   fun isFoundryLocalInstalled(context: Context): Boolean {
-       return try {
-           context.packageManager.getPackageInfo(
-               "com.microsoft.foundrylocal",
-               0
-           )
-           true
-       } catch (e: PackageManager.NameNotFoundException) {
-           false
-       }
-   }
-   ```
+### IPC manager cannot connect
 
-   If not installed:
-   - Direct users to install from the private preview GitHub repository
-   - The GitHub version does not require app signature validation
+IPC mode requires the Foundry Local service app.
 
-2. **Check Foundry Local App version**
-   ```kotlin
-   fun getFoundryLocalVersion(context: Context): String? {
-       return try {
-           val packageInfo = context.packageManager.getPackageInfo(
-               "com.microsoft.foundrylocal",
-               0
-           )
-           packageInfo.versionName
-       } catch (e: PackageManager.NameNotFoundException) {
-           null
-       }
-   }
-   ```
+1. Install or update the
+   [Foundry Local service app from Google Play](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app).
+2. Confirm the SDK AAR and service app come from compatible releases.
+3. Retry `FoundryLocalManager.create(...)`.
+4. If a previously working connection was lost, use `manager.reconnect()` instead of creating
+   duplicate managers.
 
-   Update to the latest version from the private preview repository if outdated.
+After reconnecting, reacquire the catalog, model, and inference clients.
 
-3. **Verify permissions**
+### Compatibility check reports false
 
-   Ensure `INTERNET` permission is in `AndroidManifest.xml`:
+```kotlin
+suspend fun checkCompatibility(manager: FoundryLocalManager) {
+    val compatibility = manager.checkCompatibility()
+    if (!compatibility.isCompatible) {
+        showUpdateMessage(compatibility.message)
+    }
+}
+```
+
+Update the IPC service app or use the SDK artifact required by the release. Do not ignore an
+incompatible result and continue with model operations.
+
+## Catalog is empty or unavailable
+
+1. Confirm the app declares internet permission:
+
    ```xml
    <uses-permission android:name="android.permission.INTERNET" />
    ```
 
-4. **Verify app installation**
+2. Confirm the device has network access.
+3. Retry `manager.getCatalog().listModels()`.
+4. Log the exception type, message, and `errorCode` without logging prompts or user content.
 
-   Use the Foundry Local App from this private preview GitHub repository.
+Do not fall back to a hard-coded model alias when catalog discovery fails.
 
----
+## Model alias is not found
 
-
-## Model Loading Errors
-
-### Model Fails to Load
-
-**Symptoms:**
-- `model.load()` callback returns `successful = false`
-- Error message about missing files or insufficient memory
-
-**Solutions:**
-
-1. **Verify the model is fully downloaded**
-   ```kotlin
-   val isCached = model.isCached().data ?: false
-   if (!isCached) {
-       Log.e(TAG, "Model not cached — download it first")
-       model.download(context, downloadCallback)
-       return
-   }
-   ```
-
-2. **Check available memory before loading**
-   ```kotlin
-   val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-   val memInfo = ActivityManager.MemoryInfo()
-   activityManager.getMemoryInfo(memInfo)
-   val availableMB = memInfo.availMem / (1024 * 1024)
-   if (availableMB < 500) {
-       showError("Not enough free memory. Close other apps and try again.")
-       return
-   }
-   ```
-
-3. **Unload any previously loaded model** — unloading other models can free memory and improve load reliability, especially on low-memory devices.
-   ```kotlin
-   currentModel?.unload(progressCallback)
-   ```
-
----
-
-
-## Chat Completion Issues
-
-### Empty or Null Responses
-
-**Symptoms:**
-- `completeChat()` succeeds but returns null/empty content
-- No error messages
-
-**Solutions:**
-
-1. **Verify model is loaded**
-   ```kotlin
-   val isLoaded = model.isLoaded().data ?: false
-
-   if (!isLoaded) {
-       Log.e(TAG, "Model not loaded - load before creating client")
-       model.load(loadCallback)
-       return
-   }
-   ```
-
-2. **Check request validity**
-   ```kotlin
-   fun validateRequest(request: ChatCompletionRequest): Boolean {
-       if (request.messages.isEmpty()) {
-           Log.e(TAG, "Request has no messages")
-           return false
-       }
-
-       val hasUserMessage = request.messages.any {
-           it.role == ChatMessage.Role.USER
-       }
-
-       if (!hasUserMessage) {
-           Log.e(TAG, "Request has no user message")
-           return false
-       }
-
-       return true
-   }
-   ```
-
-3. **Verify conversation history length**
-   ```kotlin
-   val totalTokens = request.messages.sumOf {
-       it.content.split(" ").size * 1.3  // Rough token estimate
-   }
-
-   if (totalTokens > 2000) {  // Model context limit
-       Log.w(TAG, "Conversation too long, trimming history")
-       trimConversationHistory(request)
-   }
-   ```
-
-4. **Check maxTokens parameter**
-   ```kotlin
-   // Don't set maxTokens too low
-   request.maxTokens = 150  // Good
-   // request.maxTokens = 1  // Bad - may truncate response
-   ```
-
-### Inference is Very Slow
-
-**Symptoms:**
-- Chat completion takes 30+ seconds
-- App appears frozen
-- Device gets hot
-
-**Solutions:**
-
-1. **Reduce maxTokens**
-   ```kotlin
-   // Instead of:
-   request.maxTokens = 500  // Slow
-
-   // Try:
-   request.maxTokens = 100  // Faster
-   ```
-
-2. **Use a smaller model**
-   ```kotlin
-   // Instead of:
-   val model = catalog.getModel("phi-3-mini-4k").data  // ~2GB, slower
-
-   // Try:
-   val model = catalog.getModel("qwen2.5-0.5b").data  // ~500MB, faster
-   ```
-
-3. **Reduce conversation history**
-   ```kotlin
-   fun trimHistory(messages: MutableList<ChatMessage>, maxMessages: Int = 5) {
-       if (messages.size > maxMessages) {
-           val systemMsg = messages.firstOrNull { it.role == ChatMessage.Role.SYSTEM }
-           val recent = messages.takeLast(maxMessages - 1)
-
-           messages.clear()
-           systemMsg?.let { messages.add(it) }
-           messages.addAll(recent)
-       }
-   }
-   ```
-
-4. **Check device thermal state**
-   ```kotlin
-   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-       val powerManager = getSystemService(PowerManager::class.java)
-       val thermalStatus = powerManager.currentThermalStatus
-
-       if (thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE) {
-           Log.w(TAG, "Device is hot - inference will be slow")
-           showWarning("Device is hot. Performance may be reduced.")
-       }
-   }
-   ```
-
-5. **Use streaming for better UX**
-   ```kotlin
-   // Users perceive streaming as faster
-   chatClient.completeChatStreaming(request, callback)
-   ```
-
----
-
-## Performance Problems
-
-1. **Unload model when not in use**
-   ```kotlin
-   override fun onPause() {
-       super.onPause()
-
-       if (!isChangingConfigurations && !isFinishing) {
-           model?.unload(progressCallback)
-       }
-   }
-   ```
----
-
-## Embedded SDK Issues
-
-### UnsatisfiedLinkError or "Native library loading failed" for onnxruntime
-
-**Cause:** The ONNX Runtime native library is not packaged in your APK. The embedded SDK's native Core requires `libonnxruntime.so` at runtime, which is provided by the `onnxruntime-android` dependency.
-
-**Fix:** Add the ONNX Runtime Android dependency to the host app:
+Model aliases can change between releases. Query the current catalog:
 
 ```kotlin
-dependencies {
-    // The embedded SDK requires onnxruntime-android at runtime:
-    runtimeOnly("com.microsoft.onnxruntime:onnxruntime-android:1.24.3")
+suspend fun logAvailableModels(manager: FoundryLocalManager) {
+    manager.getCatalog().listModels().forEach { info ->
+        Log.d(TAG, "Available model: ${info.alias}, task=${info.task}")
+    }
 }
 ```
 
-If the dependency is present but the error persists, verify the `onnxruntime-android` artifact is packaged for your app's target ABI (arm64-v8a) and that `FoundryLocalManager.create()` is being called (which triggers native library loading during `CoreRuntime.initialize()`).
+Use an alias from this result. If a previously saved alias is absent, prompt the user to select an
+available model.
 
-### Model not found when using incorrect model name
+## Download fails or stalls
 
-**Cause:** Using a model name that doesn't exactly match an alias in the catalog. Aliases vary — some are short (e.g., `phi-4-mini`), others are versioned (e.g., `qwen2.5-coder-0.5b-instruct-generic-cpu:4`).
+1. Confirm the model is not already being downloaded:
 
-**Fix:** Call `catalog.listModels()` first, then pass the exact `alias` field value into `catalog.getModel(...)`.
-
-### OgaHandle cannot be re-initialized
-
-**Cause:** ORT GenAI runtime lifecycle. Once shutdown occurs, the runtime cannot be restarted in the same process.
-
-**Fix:** Do not call `OgaShutdown()` directly. The embedded SDK's `close()` method is safe to call because it only cleans up SDK wrappers and never shuts down the ORT runtime. If you hit this error, something in the app is shutting the runtime down directly.
-
-### Embedded SDK not detected / IPC SDK used instead
-
-**Cause:** ContentProvider auto-registration order or packaging issues.
-
-**Fix:** Ensure the embedded SDK AAR is present in `libs/`. If both IPC and embedded AARs are present, the embedded SDK wins (its `initOrder=50` runs after IPC's `initOrder=100`, overwriting the factory). The most common cause is the embedded AAR being missing entirely — verify it was copied into `libs/` after building.
-
----
-
-## Getting Help
-
-If issues persist:
-
-1. **Check logs**
-   ```bash
-   adb logcat | grep -i foundry
-   ```
-
-2. **Enable verbose logging**
    ```kotlin
-   val options = Configuration(
-       appName = "MyApp",
-       logLevel = "Verbose"  // Maximum logging
-   )
+   suspend fun startDownload(model: Model) {
+       if (!model.isDownloading()) {
+           model.download(progress = ::updateProgress)
+       }
+   }
    ```
 
----
+2. Confirm network connectivity and available storage.
+3. Keep the download coroutine alive for the intended operation lifetime.
+4. If using a timeout, increase it for slower networks or pass `0` to disable the stalled-download
+   timeout.
+5. Retry only after the previous download coroutine has completed or been cancelled.
 
-## See Also
+Coroutine cancellation stops the download. Treat `CancellationException` as cancellation, not as a
+download failure.
 
-- [Integration Guide](INTEGRATION_GUIDE.md) - Setup instructions
-- [API Reference](API_REFERENCE.md) - Complete API documentation
-- [Examples](EXAMPLES.md) - Code examples
-- [Best Practices](BEST_PRACTICES.md) - Development guidelines
+## Model does not load
+
+Check lifecycle state in order:
+
+```kotlin
+suspend fun prepareModel(model: Model) {
+    if (!model.isCached()) {
+        model.download()
+    }
+    if (!model.isLoaded()) {
+        model.load()
+    }
+}
+```
+
+If loading still fails:
+
+1. Unload models that are no longer needed.
+2. Release other memory-intensive resources owned by your app.
+3. Preserve the `FoundryLocalException` details for support.
+
+Avoid fixed universal memory thresholds; the required memory depends on the model and workload.
+
+## Chat client creation fails
+
+`createChatClient()` requires a loaded model that supports chat.
+
+1. Verify `model.isLoaded()` is true.
+2. Confirm the selected model is intended for chat.
+3. Reacquire the model and client after an IPC reconnection.
+4. Do not reuse a client after unloading its model.
+
+The same rules apply to `createAudioClient()` with an audio-capable model.
+
+## Chat response is empty
+
+1. Confirm the request contains at least one non-empty user message.
+2. Inspect `response.message` safely:
+
+   ```kotlin
+   val text = response.message?.content.orEmpty()
+   if (text.isBlank()) {
+       showError("The model returned an empty response")
+   }
+   ```
+
+3. Retry with the default request options to isolate optional sampling settings.
+4. Reduce conversation history according to the selected model's documented context limit.
+5. Confirm streaming callers append `chunk.delta`, not the entire chunk object.
+
+## Streaming stops unexpectedly
+
+Streaming is tied to the collecting coroutine:
+
+```kotlin
+streamingJob = viewModelScope.launch(Dispatchers.IO) {
+    chatClient.completeChatStreaming(request).collect { chunk ->
+        withContext(Dispatchers.Main) {
+            appendText(chunk.delta)
+        }
+    }
+}
+```
+
+Check whether the scope or `Job` was cancelled by navigation, lifecycle destruction, or a user
+action. In IPC mode, also check `manager.isConnected`.
+
+If disconnected:
+
+1. cancel the old streaming job;
+2. reconnect the manager;
+3. reacquire the catalog, model, and chat client; and
+4. start a new request.
+
+## Audio file cannot be transcribed
+
+`AudioTranscriptionRequest.filePath` must identify a file readable by the calling app.
+
+1. Confirm the file exists and is not empty.
+2. Confirm its format is supported by the selected model.
+3. Use the file-selection and storage flow demonstrated by the release sample application.
+4. Close open writers before starting transcription.
+
+In IPC mode, the SDK opens the file in the calling app and passes a file descriptor to the service.
+The service does not need direct access to the app's filesystem path.
+
+For real-time transcription, ensure audio chunks match the configured sample rate, channel count,
+and bits per sample.
+
+## IPC connection is lost
+
+Register `onDisconnected` when creating the manager:
+
+```kotlin
+suspend fun createIpcManager(context: Context): FoundryLocalManager {
+    return FoundryLocalManager.create(
+        context,
+        Configuration(appName = "MyApp"),
+        onDisconnected = {
+            mainHandler.post { showReconnectAction() }
+        }
+    )
+}
+```
+
+Then reconnect from a coroutine:
+
+```kotlin
+suspend fun reconnect(
+    manager: FoundryLocalManager,
+    modelAlias: String
+): Model {
+    manager.reconnect()
+    return manager.getCatalog().getModel(modelAlias)
+}
+```
+
+Do not keep using handles acquired before reconnecting.
+
+## Embedded app fails during startup
+
+1. Confirm the embedded release AAR is packaged in the app.
+2. Inspect the final APK or App Bundle to confirm native libraries from the AAR are present.
+3. Confirm the device configuration is supported by the release.
+
+Do not add separate native runtime libraries alongside the embedded AAR unless the release
+instructions explicitly require them.
+
+## Collect useful diagnostics
+
+Record:
+
+- deployment mode;
+- SDK artifact version and SHA-256;
+- service-app version for IPC mode;
+- Android version and device model;
+- operation name and model alias;
+- exception type, message, and `errorCode`; and
+- whether the failure reproduces after a clean restart.
+
+Do not include prompts, generated responses, transcripts, raw audio, credentials, or user
+identifiers in logs or support reports.
+
+## See also
+
+- [Integration Guide](INTEGRATION_GUIDE.md)
+- [API Reference](API_REFERENCE.md)
+- [Examples](EXAMPLES.md)
+- [Best Practices](BEST_PRACTICES.md)
+- [IPC and embedded deployment modes](IPC_AND_EMBEDDED_MODES.md)

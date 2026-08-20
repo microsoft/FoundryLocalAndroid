@@ -1,391 +1,212 @@
-# Foundry Local Android - Best Practices
+# Best Practices
 
-Guidelines and recommendations for developing with Foundry Local SDK.
+Foundry Local runs inference on the Android device, so application lifecycle, coroutine ownership,
+memory, and storage directly affect reliability.
 
-## Table of Contents
+## Use lifecycle-owned coroutines
 
-- [Error Handling](#error-handling)
-- [Model Lifecycle](#model-lifecycle)
-- [Connection Management](#connection-management)
-- [Performance Optimization](#performance-optimization)
-- [Memory Management](#memory-management)
-- [UI/UX Guidelines](#uiux-guidelines)
-
----
-
-## Error Handling
-
-### Always Check FLResult Status
-
-**✅ DO:** Check status before accessing data
+Call suspend functions from a scope that has a clear owner, such as `viewModelScope`:
 
 ```kotlin
-val result = catalog.getModel("phi-3-mini-4k")
-
-if (result.status) {
-    val model = result.data!!
-    // Safe to use model
-} else {
-    Log.e(TAG, "Error: ${result.error?.message}")
-    // Handle error appropriately
-}
-```
-
-**❌ DON'T:** Assume operations always succeed
-
-```kotlin
-// BAD - May crash if operation failed
-val model = catalog.getModel("phi-3-mini-4k").data!!
-```
-
-### Handle All Error Cases
-
-**✅ DO:** Implement comprehensive error handling
-
-```kotlin
-fun handleChatError(result: FLResult<ChatCompletion>) {
-    if (!result.status) {
-        when (result.error?.code) {
-            400 -> showError("Invalid request. Please check your input.")
-            403 -> showError("Permission denied. Please check app configuration.")
-            404 -> showError("Model not found. Please download the model first.")
-            500 -> showError("Internal error. Please try again.")
-            503 -> showError("Service unavailable. Please check if Foundry Local App is installed.")
-            else -> showError("An error occurred: ${result.error?.message}")
+viewModelScope.launch(Dispatchers.IO) {
+    try {
+        val response = chatClient.completeChat(request)
+        withContext(Dispatchers.Main) {
+            render(response.message?.content.orEmpty())
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: FoundryLocalException) {
+        withContext(Dispatchers.Main) {
+            showError(error.message ?: "Inference failed")
         }
     }
 }
 ```
 
-### Provide User-Friendly Error Messages
+Avoid unmanaged application-wide scopes for UI work. Keep a process-level scope only for an
+operation that intentionally outlives an Activity, and expose its state back to the UI.
 
-**✅ DO:** Convert technical errors to user-friendly messages
+## Preserve coroutine cancellation
 
-```kotlin
-fun getUserFriendlyError(error: FLError): String {
-    return when (error.code) {
-        400 -> "Your request couldn't be processed. Please try again."
-        403 -> "You don't have permission to access this feature."
-        404 -> "The requested model is not available."
-        503 -> "The AI service is not available. Please install Foundry Local App."
-        else -> "Something went wrong. Please try again later."
-    }
-}
-```
-
----
-
-## Model Lifecycle
-
-### Follow the Proper Lifecycle
-
-The correct order of operations:
-
-1. **Download** (if not cached)
-2. **Load** (if not loaded)
-3. **Use** (create client, run inference)
-4. **Unload** (when done)
-
-**✅ DO:** Check status before each step
+Downloads and streaming inference support coroutine cancellation. Always rethrow
+`CancellationException` before handling other failures:
 
 ```kotlin
-suspend fun setupModel(catalog: Catalog, modelAlias: String): FoundryChatCompletionClient? {
-    val model = catalog.getModel(modelAlias).data ?: return null
-    
-    // Step 1: Download if needed
-    if (model.isCached().data != true) {
-        suspendCancellableCoroutine { cont ->
-            model.download(context, object : FoundryOperationProgressCallback {
-                override fun onOperationComplete(
-                    operationType: FoundryOperationProgressCallback.OperationType,
-                    modelAlias: String,
-                    successful: Boolean,
-                    errorMessage: String?
-                ) {
-                    if (successful) cont.resume(Unit) {}
-                    else cont.resumeWithException(Exception(errorMessage)) {}
-                }
-                override fun onProgressUpdate(/*...*/) {}
-            })
-        }
-    }
-    
-    // Step 2: Load if needed
-    if (model.isLoaded().data != true) {
-        suspendCancellableCoroutine { cont ->
-            model.load(object : FoundryOperationProgressCallback {
-                override fun onOperationComplete(
-                    operationType: FoundryOperationProgressCallback.OperationType,
-                    modelAlias: String,
-                    successful: Boolean,
-                    errorMessage: String?
-                ) {
-                    if (successful) cont.resume(Unit) {}
-                    else cont.resumeWithException(Exception(errorMessage)) {}
-                }
-                override fun onProgressUpdate(/*...*/) {}
-            })
-        }
-    }
-    
-    // Step 3: Create client
-    return model.createChatCompletionClient().data
-}
-```
-
-
-### Reuse Chat Clients
-
-**✅ DO:** Create client once and reuse
-
-```kotlin
-class ChatManager {
-    private var chatClient: FoundryChatCompletionClient? = null
-    
-    suspend fun initialize(model: FoundryModel) {
-        // Create once
-        chatClient = model.createChatCompletionClient().data
-    }
-    
-    suspend fun chat(message: String): String? {
-        // Reuse client
-        val request = ChatCompletionRequest().apply {
-            messages.add(ChatMessage(ChatMessage.Role.USER, message))
-        }
-        return chatClient?.completeChat(request)?.data?.message?.content
-    }
-}
-```
-
-**❌ DON'T:** Create new client for each request
-
-```kotlin
-// BAD - Creates unnecessary overhead
-suspend fun chat(model: FoundryModel, message: String): String? {
-    val client = model.createChatCompletionClient().data  // Don't recreate!
-    // ...
-}
-```
-
----
-
-## Connection Management
-
-### Check Connection State Before Operations
-
-**✅ DO:** Verify connection before making calls
-
-```kotlin
-fun performOperation() {
-    if (!manager.isConnected) {
-        Log.e(TAG, "Not connected to service")
-        reconnect()
-        return
-    }
-    
-    // Safe to proceed
-    lifecycleScope.launch(Dispatchers.Default) {
-        val catalog = manager.getCatalog().data
-        // ...
-    }
-}
-```
-
-### Handle Service Unavailability
-
-**✅ DO:** Gracefully handle missing service
-
-```kotlin
-val connected = manager.connect(context, callback)
-
-if (!connected) {
-    // Service not available
-    AlertDialog.Builder(this)
-        .setTitle("Foundry Local Required")
-        .setMessage("Please install Foundry Local App to use AI features.")
-        .setPositiveButton("Install") { _, _ ->
-            // Guide to installation
-        }
-        .show()
-}
-```
-
----
-
-## Performance Optimization
-
-### Choose Appropriate Models
-
-**✅ DO:** Select models based on device capabilities
-
-```kotlin
-fun selectModelForDevice(): String {
-    val memoryClass = (getSystemService(ACTIVITY_SERVICE) as ActivityManager)
-        .memoryClass
-    
-    return when {
-        memoryClass >= 512 -> "phi-3-mini-4k"  // High-end device
-        memoryClass >= 256 -> "qwen2.5-0.5b"   // Mid-range
-        else -> "qwen2.5-0.5b"                  // Low-end
-    }
-}
-```
-
-### Optimize Request Parameters
-
-**✅ DO:** Use appropriate parameters for use case
-
-```kotlin
-// For fast, concise responses
-val quickRequest = ChatCompletionRequest().apply {
-    messages.add(ChatMessage(ChatMessage.Role.USER, question))
-    temperature = 0.3f  // Low for focused responses
-    maxTokens = 50      // Short responses
-}
-
-// For creative, detailed responses
-val creativeRequest = ChatCompletionRequest().apply {
-    messages.add(ChatMessage(ChatMessage.Role.USER, prompt))
-    temperature = 0.9f  // High for creativity
-    maxTokens = 500     // Longer responses
-}
-```
-
-### Limit Conversation History
-
-**✅ DO:** Trim old messages to maintain performance
-
-```kotlin
-fun addMessageWithLimit(
-    messages: MutableList<ChatMessage>,
-    newMessage: ChatMessage,
-    maxMessages: Int = 10
+suspend fun collectResponse(
+    chatClient: ChatClient,
+    request: ChatCompletionRequest
 ) {
-    messages.add(newMessage)
-    
-    // Keep system message + last N messages
-    if (messages.size > maxMessages) {
-        val systemMsg = messages.firstOrNull { 
-            it.role == ChatMessage.Role.SYSTEM 
-        }
-        val recentMessages = messages.takeLast(maxMessages - 1)
-        
-        messages.clear()
-        systemMsg?.let { messages.add(it) }
-        messages.addAll(recentMessages)
+    try {
+        chatClient.completeChatStreaming(request).collect(::appendChunk)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: FoundryLocalException) {
+        report(error)
     }
 }
 ```
 
-### Use Streaming for Long Responses
+Store the `Job` when the user needs a Cancel or Stop action.
 
-**✅ DO:** Use streaming for better perceived performance
+## Follow the model lifecycle
 
-```kotlin
-// Streaming feels faster for users
-chatClient.completeChatStreaming(request, streamingCallback)
+Use the same sequence in IPC and embedded modes:
 
-// vs non-streaming which waits for complete response
-val response = chatClient.completeChat(request)  // User waits longer
-```
-
----
-
-## Memory Management
-
-### Monitor Device Memory
-
-**✅ DO:** Check available memory before operations
+1. Discover a model with `catalog.listModels()`.
+2. Get its handle with `catalog.getModel(info.alias)`.
+3. Download it if `isCached()` is false.
+4. Load it if `isLoaded()` is false.
+5. Create and reuse the appropriate client.
+6. Cancel active work before unloading.
+7. Remove cached files only after unloading.
 
 ```kotlin
-fun hasEnoughMemory(): Boolean {
-    val activityManager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-    val memInfo = ActivityManager.MemoryInfo()
-    activityManager.getMemoryInfo(memInfo)
-    
-    val availableMemMB = memInfo.availMem / (1024 * 1024)
-    
-    return availableMemMB > 500  // Need at least 500MB free
-}
-
-fun loadModelSafely() {
-    if (hasEnoughMemory()) {
-        model?.load(progressCallback)
-    } else {
-        showError("Not enough memory. Please close other apps.")
+suspend fun prepareChatModel(catalog: Catalog, alias: String): Pair<Model, ChatClient> {
+    val model = catalog.getModel(alias)
+    if (!model.isCached()) {
+        model.download()
     }
+    if (!model.isLoaded()) {
+        model.load()
+    }
+    return model to model.createChatClient()
 }
 ```
----
 
-## UI/UX Guidelines
+Do not repeatedly create clients for the same loaded model. Reuse the client until the model is
+unloaded or the IPC connection is replaced.
 
-### Provide Progress Feedback
+## Validate the selected model
 
-**✅ DO:** Show progress for long operations
-
-```kotlin
-model.download(context, object : FoundryOperationProgressCallback {
-    override fun onProgressUpdate(
-        operationType: FoundryOperationProgressCallback.OperationType,
-        modelAlias: String,
-        status: FoundryOperationProgressCallback.OperationStatus,
-        progressPercent: Int,
-        message: String?
-    ) {
-        runOnUiThread {
-            progressBar.progress = progressPercent
-            statusText.text = "Downloading model: $progressPercent%"
-        }
-    }
-    
-    override fun onOperationComplete(/*...*/) {
-        runOnUiThread {
-            progressBar.visibility = View.GONE
-            statusText.text = "Ready!"
-        }
-    }
-})
-```
-
-### Implement Request Permissions
-
-**✅ DO:** Request permissions at appropriate times
+Treat the model alias as application configuration and verify it against the current catalog:
 
 ```kotlin
-private fun requestNotificationPermission() {
-    if (Build.VERSION.SDK_INT >= 33) {
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) 
-            != PackageManager.PERMISSION_GRANTED) {
-            
-            if (shouldShowRequestPermissionRationale(
-                Manifest.permission.POST_NOTIFICATIONS)) {
-                // Show explanation
-                AlertDialog.Builder(this)
-                    .setTitle("Notification Permission")
-                    .setMessage("We need this permission to show model download progress.")
-                    .setPositiveButton("OK") { _, _ ->
-                        requestPermissions(
-                            arrayOf(Manifest.permission.POST_NOTIFICATIONS), 
-                            REQUEST_CODE_NOTIFICATIONS
-                        )
-                    }
-                    .show()
-            } else {
-                requestPermissions(
-                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                    REQUEST_CODE_NOTIFICATIONS
-                )
-            }
-        }
-    }
+suspend fun validateModel(catalog: Catalog, modelAlias: String): ModelInfo {
+    return catalog.getModelInfo(modelAlias)
 }
 ```
----
 
-## See Also
+Handle a missing or incompatible configured model explicitly.
 
-- [Integration Guide](INTEGRATION_GUIDE.md) - Quick start guide
-- [API Reference](API_REFERENCE.md) - Complete API documentation
-- [Examples](EXAMPLES.md) - Code examples
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
+## Handle IPC disconnections
+
+IPC mode can lose its service process independently of your app. Register `onDisconnected`, move
+the UI into a disconnected state, and reconnect from a coroutine:
+
+```kotlin
+suspend fun createIpcManager(context: Context): FoundryLocalManager {
+    return FoundryLocalManager.create(
+        context,
+        Configuration(appName = "MyApp"),
+        onDisconnected = {
+            mainHandler.post { showReconnectAction() }
+        }
+    )
+}
+```
+
+After `manager.reconnect()`:
+
+1. Call `manager.getCatalog()` again.
+2. Reacquire the model by alias.
+3. Recheck cached and loaded state.
+4. Recreate chat or audio clients.
+
+Do not continue using handles acquired before the disconnection.
+
+Embedded mode has no service connection. Its failures occur in your app process and cannot be
+recovered through `reconnect()`.
+
+## Keep UI work on the main thread
+
+Run model operations away from the main thread. Progress callbacks and the IPC disconnection
+callback are not guaranteed to execute on the main thread, so switch to `Dispatchers.Main` before
+updating views or Compose state.
+
+Avoid logging prompts, responses, transcripts, or raw audio. Log operation names, aliases, durations,
+counts, and payload sizes instead.
+
+## Manage memory deliberately
+
+Loaded models consume device memory until unloaded:
+
+- load only the models needed for the current experience;
+- cancel inference before unloading its model;
+- unload models when their owning feature is finished;
+- avoid loading multiple large models unless the device has been tested for that workload; and
+- in embedded mode, test alongside the rest of the app's memory-intensive features.
+
+Do not use a fixed free-memory threshold copied from another app. Android memory pressure varies by
+device, process state, model, and workload.
+
+## Manage conversation history
+
+Send only history needed for the current response:
+
+```kotlin
+val request = ChatCompletionRequest(
+    messages = conversation.takeLast(maxMessages)
+)
+```
+
+Context limits differ by model. Follow the selected model's documentation rather than using a
+universal token limit. Preserve system instructions when trimming and avoid splitting a logical
+user/assistant turn.
+
+## Validate request parameters
+
+Start with model defaults. Set sampling controls only when the selected model documents them and
+your application needs them. Validate empty input before starting inference.
+
+## Keep one deployment mode per app
+
+Package either the IPC release AAR or the embedded release AAR. Do not include both unless the
+specific release documents that combination as supported.
+
+When switching modes, retest:
+
+- initialization and cleanup;
+- model cache location and disk use;
+- memory pressure and process recovery;
+- IPC installation and reconnection, when applicable; and
+- final APK or App Bundle packaging.
+
+## Close resources in dependency order
+
+Cancel active jobs before releasing their dependencies:
+
+```kotlin
+suspend fun releaseResources(
+    manager: FoundryLocalManager,
+    model: Model,
+    audioSession: AudioStreamSession?,
+    streamingJob: Job?
+) {
+    streamingJob?.cancelAndJoin()
+    audioSession?.stop()
+    if (model.isLoaded()) {
+        model.unload()
+    }
+    manager.close()
+}
+```
+
+Run suspend cleanup from an appropriate coroutine. Do not issue new operations after `close()`.
+
+## Network, privacy, and telemetry
+
+Inference executes locally, but catalog access, model downloads, service-app installation or updates,
+and telemetry can use the network. Do not promise that the application never communicates externally
+unless the complete release configuration and application behavior have been verified.
+
+Avoid putting secrets or user content in `additionalSettings`, logs, analytics, or exception
+messages.
+
+## See also
+
+- [Integration Guide](INTEGRATION_GUIDE.md)
+- [API Reference](API_REFERENCE.md)
+- [Examples](EXAMPLES.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+- [IPC and embedded deployment modes](IPC_AND_EMBEDDED_MODES.md)

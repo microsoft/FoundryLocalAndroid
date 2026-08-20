@@ -1,1212 +1,487 @@
-# Foundry Local Android - API Reference
+# API Reference
 
-Complete reference documentation for all classes, methods, and types in the Foundry Local SDK.
+Foundry Local exposes one coroutine-based Kotlin API for IPC and embedded deployment modes.
 
-## SDK Variants
+> **Preview:** Foundry Local for Android is under active development. The API surface and supported
+> capabilities continue to grow and may change between preview releases. Pin the AAR version used by
+> your app and review the release notes before upgrading.
 
-Foundry Local for Android offers two SDK variants that share the same public API:
-
-| Variant | Artifact | Description |
-|---------|----------|-------------|
-| **IPC SDK** | `com.microsoft.foundrylocal:ipc-sdk` | Communicates with a separate Foundry Local service app via AIDL IPC. The service hosts the native inference runtime. |
-| **Embedded SDK** | `com.microsoft.foundrylocal:embedded-sdk` | Runs the native inference runtime directly inside the client app's process via JNI. No service app required. |
-
-Both SDKs implement the same shared API interfaces (`FoundryLocalManager`, `Catalog`, `Model`, `ChatClient`). Code written against the shared API works with either SDK — just swap the dependency.
-
-### Choosing a Variant
-
-- **IPC SDK**: Use when you want the service app to manage model lifecycle independently, share models across apps, or keep inference memory out of your app's process.
-- **Embedded SDK**: Use when you want a self-contained app with no external dependencies, simpler deployment, or need to bundle native libraries directly.
-
-### Quick Start (Embedded SDK)
+Import API types from:
 
 ```kotlin
-// The API is identical — only the Gradle dependency changes.
-// With the embedded SDK on the classpath, FoundryLocalManager.create()
-// automatically uses in-process inference.
-
-val manager = FoundryLocalManager.create(context, Configuration(appName = "my-app"))
-val catalog = manager.getCatalog()
-val models = catalog.listModels()
-
-val model = catalog.getModel("phi-4-mini")
-model.download { progress -> Log.d("Demo", "Download: ${(progress * 100).toInt()}%") }
-model.load()
-
-val chatClient = model.createChatClient()
-val request = ChatCompletionRequest(
-    messages = listOf(ChatMessage(role = "user", content = "Hello!"))
-)
-val response = chatClient.completeChat(request)
-
-// Streaming
-chatClient.completeChatStreaming(request).collect { chunk ->
-    print(chunk.delta)
-}
-
-manager.close()
+import com.microsoft.foundrylocal.api.*
 ```
 
-> **Note:** Audio transcription (`createAudioClient()`) is not yet available in the embedded SDK. It will be added in a future release.
-
-## Table of Contents
-
-- [Configuration](#configuration)
-- [FoundryLocalManager](#foundrylocalmanager)
-- [Catalog](#catalog)
-- [FoundryModel](#foundrymodel)
-- [FoundryModelInfo](#foundrymodelinfo)
-- [FoundryChatCompletionClient](#foundrychatcompletionclient)
-- [ChatCompletionRequest](#chatcompletionrequest)
-- [ChatMessage](#chatmessage)
-- [ChatCompletion](#chatcompletion)
-- [Audio Transcription](#audio-transcription)
-  - [FoundryAudioTranscriptionClient](#foundryaudiotranscriptionclient)
-  - [AudioTranscriptionCallback](#audiotranscriptioncallback)
-  - [AudioTranscriptionRequest](#audiotranscriptionrequest)
-  - [AudioTranscriptionResponse](#audiotranscriptionresponse)
-  - [AudioStreamSettings](#audiostreamsettings)
-  - [AudioStreamResult](#audiostreamresult)
-- [FLResult](#flresult)
-- [Callbacks](#callbacks)
-- [Error Codes](#error-codes)
-
----
-
-## Configuration
-
-Configuration options for initializing the Foundry Local SDK.
-
-```kotlin
-data class Configuration(
-    var appName: String = "foundry",
-    var modelCacheDir: String? = null,
-    var logLevel: String = "Information",
-    var azureCatalogFilter: String? = null,
-    var disableTelemetry: Boolean = false,
-    var numDownloadThreads: Int = 4
-)
-```
-
-### Properties
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `appName` | `String` | `"foundry"` | **Required**. Your application name for identification |
-| `modelCacheDir` | `String?` | `null` | Optional custom directory for caching models |
-| `logLevel` | `String` | `"Information"` | Logging level (see [Log Levels](#log-levels)) |
-| `azureCatalogFilter` | `String?` | `null` | Optional filter for Azure catalog models |
-| `disableTelemetry` | `Boolean` | `false` | Set to `true` to disable telemetry collection |
-| `numDownloadThreads` | `Int` | `4` | Number of threads for parallel model downloads (ExampleApp uses 16) |
-
-### Log Levels
-
-Valid values for `logLevel`:
-- `"Verbose"` - Most detailed logging
-- `"Debug"` - Debug information
-- `"Information"` - General information (default)
-- `"Warning"` - Warning messages only
-- `"Error"` - Error messages only
-- `"Fatal"` - Fatal errors only
-
-### Example
-
-```kotlin
-val options = Configuration(
-    appName = "MyApp",
-    logLevel = "Debug",
-    modelCacheDir = "/custom/cache/path",
-    disableTelemetry = false,
-    numDownloadThreads = 16
-)
-```
-
----
+Suspend functions return values directly and throw `FoundryLocalException` on failure. Streaming
+operations return Kotlin `Flow`.
 
 ## FoundryLocalManager
 
-Main entry point for the Foundry Local SDK. Manages service connection and provides access to the model catalog.
+`FoundryLocalManager` initializes Foundry Local and provides access to the model catalog.
+
+### Initialize the runtime
 
 ```kotlin
-class FoundryLocalManager(options: Configuration)
-```
-
-### Constructor
-
-```kotlin
-FoundryLocalManager(options: Configuration)
-```
-
-**Parameters:**
-- `options` - Configuration options for the SDK
-
-### Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `isConnected` | `Boolean` | Whether the manager is currently connected to the service |
-
-### Methods
-
-#### connect()
-
-Establishes connection to the Foundry Local service.
-
-```kotlin
-fun connect(
-    context: Context?, 
-    callback: FoundryServiceConnectionCallback?
-): Boolean
-```
-
-**Parameters:**
-- `context` - Android context (Activity or Application)
-- `callback` - Optional callback for connection state changes
-
-**Returns:** `Boolean` - `true` if connection initiated successfully, `false` otherwise
-
-**Example:**
-```kotlin
-val connected = manager.connect(context, object : FoundryServiceConnectionCallback {
-    override fun onServiceConnected(service: IFoundryLocalManager) {
-        Log.d(TAG, "Connected")
-    }
-    
-    override fun onServiceDisconnected(
-        errorCode: FoundryServiceConnectionCallback.ErrorCode, 
-        message: String?
-    ) {
-        Log.e(TAG, "Disconnected: ${message ?: "unknown"}")
-    }
-})
-```
-
-#### disconnect()
-
-Disconnects from the Foundry Local service.
-
-```kotlin
-fun disconnect(context: Context?)
-```
-
-**Parameters:**
-- `context` - Android context used during connection
-
-**Note:** Always call this in `onDestroy()` to prevent resource leaks.
-
-#### getCatalog()
-
-Retrieves the model catalog.
-
-```kotlin
-fun getCatalog(): FLResult<Catalog>
-```
-
-**Returns:** `FLResult<Catalog>` - Result containing the catalog instance
-
-**Example:**
-```kotlin
-val result = manager.getCatalog()
-if (result.status) {
-    val catalog = result.data!!
-    // Use catalog
+suspend fun createManager(context: Context): FoundryLocalManager {
+    return FoundryLocalManager.create(
+        context = context,
+        config = Configuration(appName = "MyApp")
+    )
 }
 ```
 
-#### getAPIVersion()
-
-Gets the API version of the connected service.
+### Access models and runtime information
 
 ```kotlin
-fun getAPIVersion(): FLResult<String>
+suspend fun getCatalog(): Catalog
+suspend fun getVersionInfo(): VersionInfo
+suspend fun checkCompatibility(): CompatibilityInfo
+suspend fun getAPIVersion(): String
 ```
 
-**Returns:** `FLResult<String>` - Result containing version string
-
-#### isServiceRunning()
-
-Checks if the Foundry Local service is currently running.
+### Close the manager
 
 ```kotlin
-fun isServiceRunning(): FLResult<Boolean>
+fun close()
 ```
 
-**Returns:** `FLResult<Boolean>` - Result indicating service status
+`close()` releases manager resources. Do not use the manager after closing it.
 
-#### downloadModel()
+### IPC connection management
 
-Downloads a model by its alias.
+The following members support service connection state in IPC mode. Embedded applications do not
+need connection-management logic.
+
+Register a disconnection callback during initialization:
 
 ```kotlin
-fun downloadModel(
-    modelAlias: String, 
-    progressCallback: FoundryOperationProgressCallback
+suspend fun createIpcManager(context: Context): FoundryLocalManager {
+    return FoundryLocalManager.create(
+        context = context,
+        config = Configuration(appName = "MyApp"),
+        onDisconnected = {
+            // Post to the main thread before updating UI.
+        }
+    )
+}
+```
+
+Connection members:
+
+```kotlin
+val isConnected: Boolean
+suspend fun reconnect()
+suspend fun isServiceRunning(): Boolean
+```
+
+- `isConnected` reports the current service-binding state.
+- `reconnect()` re-establishes the service connection.
+- `isServiceRunning()` checks whether the service runtime is reachable.
+
+> **Good to know:** Reacquire `Catalog`, `Model`, `ChatClient`, and `AudioClient` handles after an
+> IPC reconnection.
+
+## Configuration
+
+```kotlin
+data class Configuration(
+    val appName: String,
+    val modelCacheDir: String? = null,
+    val logLevel: String = "Information",
+    val additionalSettings: Map<String, String>? = null,
+    val azureCatalogFilter: String? = null,
+    val disableTelemetry: Boolean = false
 )
 ```
 
-**Parameters:**
-- `modelAlias` - The model identifier (e.g., "phi-3-mini-4k")
-- `progressCallback` - Callback for download progress updates
-
-#### listLoadedModels()
-
-Lists all currently loaded models.
-
-```kotlin
-fun listLoadedModels(): FLResult<MutableList<FoundryModelInfo?>>
-```
-
-**Returns:** `FLResult<MutableList<FoundryModelInfo?>>` - Result containing list of loaded models
-
----
+| Property | Description |
+|---|---|
+| `appName` | Application name used to identify the client. |
+| `modelCacheDir` | Optional model-cache directory. `null` uses the runtime default. |
+| `logLevel` | Runtime log level. |
+| `additionalSettings` | Optional runtime settings. Use only documented keys. |
+| `azureCatalogFilter` | Optional catalog filter. Use only when documented for the release. |
+| `disableTelemetry` | Disables telemetry collection when `true`; defaults to `false`. |
 
 ## Catalog
 
-Provides access to the model catalog, cached models, and model instances.
-
-> **Note**: Due to resource limitations on mobile devices, we recommend using models smaller than 3GB. Some recommended models include `phi-3-mini-4k`, `phi-3.5-mini`, `deepseek-r1-1.5b`, `qwen2.5-0.5b`, `qwen2.5-1.5b`, `qwen2.5-coder-0.5b`, and `qwen2.5-coder-1.5b`. See [foundrylocal.ai/models](https://www.foundrylocal.ai/models) for the latest model list.
+The catalog lists models available to the selected runtime and returns model handles.
 
 ```kotlin
-class Catalog
+suspend fun listModels(): List<ModelInfo>
+suspend fun getModel(modelAlias: String): Model
+suspend fun getModelInfo(modelAlias: String): ModelInfo
+suspend fun getCachedModels(): List<ModelInfo>
+suspend fun getLoadedModels(): List<ModelInfo>
+suspend fun getCacheLocation(): String
+suspend fun setCacheLocation(directory: String)
 ```
 
-### Methods
-
-#### listModels()
-
-Lists all available models in the catalog.
+Pass the alias selected by your application:
 
 ```kotlin
-fun listModels(): FLResult<MutableList<FoundryModelInfo?>>
-```
-
-**Returns:** `FLResult<MutableList<FoundryModelInfo?>>` - Result containing list of available models
-
-**Example:**
-```kotlin
-val result = catalog.listModels()
-if (result.status) {
-    val models = result.data!!
-    models.forEach { modelInfo ->
-        modelInfo?.let {
-            println("${it.alias}: ${it.description}")
-        }
-    }
+suspend fun getSelectedModel(
+    manager: FoundryLocalManager,
+    modelAlias: String
+): Model {
+    return manager.getCatalog().getModel(modelAlias)
 }
 ```
 
-#### getModel()
+> **Good to know:** Catalog contents and aliases can change between releases. Do not treat an alias
+> copied from a guide as a stable identifier.
 
-Retrieves a specific model by its alias.
+## Model
 
-```kotlin
-fun getModel(modelAlias: String): FLResult<FoundryModel>
-```
-
-**Parameters:**
-- `modelAlias` - The model identifier (e.g., "phi-3-mini-4k")
-
-**Returns:** `FLResult<FoundryModel>` - Result containing the model instance
-
-**Example:**
-```kotlin
-val result = catalog.getModel("phi-3-mini-4k")
-if (result.status) {
-    val model = result.data!!
-    // Use model
-}
-```
-
-#### getModelInfo()
-
-Gets detailed information about a specific model.
+A `Model` represents one catalog model and controls its local lifecycle.
 
 ```kotlin
-fun getModelInfo(modelAlias: String): FLResult<FoundryModelInfo?>
-```
+val info: ModelInfo
 
-**Parameters:**
-- `modelAlias` - The model identifier
-
-**Returns:** `FLResult<FoundryModelInfo?>` - Result containing model information
-
-#### getCachedModels()
-
-Lists all models currently cached on the device.
-
-```kotlin
-fun getCachedModels(): FLResult<MutableList<FoundryModelInfo?>>
-```
-
-**Returns:** `FLResult<MutableList<FoundryModelInfo?>>` - Result containing list of cached models
-
-#### getCacheLocation()
-
-Gets the current cache directory path.
-
-```kotlin
-fun getCacheLocation(): FLResult<String>
-```
-
-**Returns:** `FLResult<String>` - Result containing cache directory path
-
-#### setCacheLocation()
-
-Sets a custom cache directory path.
-
-```kotlin
-fun setCacheLocation(directory: String): FLResult<Boolean>
-```
-
-**Parameters:**
-- `directory` - Absolute path to the cache directory
-
-**Returns:** `FLResult<Boolean>` - Result indicating success
-
-**Note:** Must have write permissions for the specified directory.
-
-#### removeCachedModel()
-
-Removes a model from the cache.
-
-```kotlin
-fun removeCachedModel(modelAlias: String): FLResult<Boolean>
-```
-
-**Parameters:**
-- `modelAlias` - The model identifier to remove
-
-**Returns:** `FLResult<Boolean>` - Result indicating success
-
-**Note:** Model must not be currently loaded.
-
----
-
-## FoundryModel
-
-Represents an AI model with methods for lifecycle management.
-
-```kotlin
-class FoundryModel
-```
-
-### Methods
-
-#### download()
-
-Downloads the model files to the device cache.
-
-```kotlin
-fun download(
-    context: Context, 
-    progressCallback: FoundryOperationProgressCallback
+suspend fun download(
+    progress: ((Float) -> Unit)? = null,
+    contentIntent: PendingIntent? = null,
+    timeoutMinutes: Int = 0
 )
+
+suspend fun load()
+suspend fun unload()
+suspend fun isDownloading(): Boolean
+suspend fun isCached(): Boolean
+suspend fun isLoaded(): Boolean
+suspend fun removeFromCache()
+suspend fun createChatClient(): ChatClient
+suspend fun createAudioClient(): AudioClient
 ```
 
-**Parameters:**
-- `context` - Android context
-- `progressCallback` - Callback for download progress
+The required order is:
 
-**Requirements:**
-- Internet connectivity
-- `INTERNET` permission
-- `POST_NOTIFICATIONS` permission (Android 13+)
-- Sufficient storage space
+1. Get the model from the catalog.
+2. Download it if it is not cached.
+3. Load it.
+4. Create a client supported by the model.
+5. Unload it when inference is complete.
+6. Remove it from the cache only after unloading.
 
-**Example:**
-```kotlin
-model.download(context, object : FoundryOperationProgressCallback {
-    override fun onProgressUpdate(
-        operationType: FoundryOperationProgressCallback.OperationType,
-        modelAlias: String,
-        status: FoundryOperationProgressCallback.OperationStatus,
-        progressPercent: Int,
-        message: String?
-    ) {
-        updateProgressBar(progressPercent)
-    }
-    
-    override fun onOperationComplete(
-        operationType: FoundryOperationProgressCallback.OperationType,
-        modelAlias: String,
-        successful: Boolean,
-        errorMessage: String?
-    ) {
-        if (successful) {
-            // Model ready to load
-        }
-    }
-})
-```
+`download()` supports coroutine cancellation. Its optional progress callback reports values from
+0 to 100. A timeout of `0` disables the stalled-download timeout.
 
-#### load()
+## ChatClient
 
-Loads the model into memory for inference.
+Create a chat client from a loaded chat model:
 
 ```kotlin
-fun load(progressCallback: FoundryOperationProgressCallback)
-```
-
-**Parameters:**
-- `progressCallback` - Callback for load progress
-
-**Requirements:**
-- Model must be downloaded/cached
-- Sufficient device memory
-
-**Note:** This operation can take several seconds depending on model size.
-
-#### unload()
-
-Unloads the model from memory.
-
-```kotlin
-fun unload(progressCallback: FoundryOperationProgressCallback)
-```
-
-**Parameters:**
-- `progressCallback` - Callback for unload progress
-
-**Note:** Always unload models when finished to free memory.
-
-#### isCached()
-
-Checks if the model is downloaded and cached.
-
-```kotlin
-fun isCached(): FLResult<Boolean>
-```
-
-**Returns:** `FLResult<Boolean>` - Result indicating if model is cached
-
-#### isLoaded()
-
-Checks if the model is currently loaded in memory.
-
-```kotlin
-fun isLoaded(): FLResult<Boolean>
-```
-
-**Returns:** `FLResult<Boolean>` - Result indicating if model is loaded
-
-#### isDownloading()
-
-Checks if the model is currently being downloaded by the service.
-
-```kotlin
-fun isDownloading(): FLResult<Boolean>
-```
-
-**Returns:** `FLResult<Boolean>` - Result indicating if a download is currently active for this model
-
-**Notes:** This queries the service-side download state, so it is accurate even if the client app was restarted during a download.
-
-#### createChatCompletionClient()
-
-Creates a chat completion client for this model.
-
-```kotlin
-fun createChatCompletionClient(): FLResult<FoundryChatCompletionClient>
-```
-
-**Returns:** `FLResult<FoundryChatCompletionClient>` - Result containing the client
-
-**Requirements:** Model must be loaded before creating a client.
-
----
-
-## FoundryModelInfo
-
-Contains metadata about a model.
-
-```kotlin
-class FoundryModelInfo
-```
-
-### Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `alias` | `String` | Model identifier (e.g., "phi-3-mini-4k") |
-| `displayName` | `String?` | Human-readable display name |
-| `description` | `String` | Human-readable description |
-| `sizeInBytes` | `Long` | Model size in bytes |
-| `fileSizeMb` | `Double?` | Model file size in megabytes |
-| `format` | `String` | Model format (e.g., "GGUF") |
-| `version` | `String?` | Model version |
-| `publisher` | `String?` | Model publisher |
-
----
-
-## FoundryChatCompletionClient
-
-Client for performing chat completions with a loaded model.
-
-```kotlin
-class FoundryChatCompletionClient
-```
-
-### Methods
-
-#### completeChat()
-
-Performs a synchronous chat completion.
-
-```kotlin
-fun completeChat(request: ChatCompletionRequest): FLResult<ChatCompletion>
-```
-
-**Parameters:**
-- `request` - The chat completion request configuration
-
-**Returns:** `FLResult<ChatCompletion>` - Result containing the completion response
-
-**Example:**
-```kotlin
-val request = ChatCompletionRequest().apply {
-    messages.add(ChatMessage(ChatMessage.Role.USER, "Hello!"))
-    temperature = 0.7f
-    maxTokens = 100
-}
-
-val result = chatClient.completeChat(request)
-if (result.status) {
-    val completion = result.data!!
-    val response = completion.message?.content
-    println(response)
+suspend fun createChatClient(model: Model): ChatClient {
+    return model.createChatClient()
 }
 ```
 
-#### completeChatStreaming()
+### One-shot completion
 
-Performs a streaming chat completion.
+```kotlin
+suspend fun completeChat(request: ChatCompletionRequest): ChatCompletion
+```
+
+```kotlin
+suspend fun completeChat(chatClient: ChatClient): String {
+    val response = chatClient.completeChat(
+        ChatCompletionRequest(
+            messages = listOf(ChatMessage.user("Hello"))
+        )
+    )
+
+    return response.message?.content.orEmpty()
+}
+```
+
+### Streaming completion
 
 ```kotlin
 fun completeChatStreaming(
-    request: ChatCompletionRequest, 
-    callback: ChatCompletionStreamingCallback
-)
+    request: ChatCompletionRequest
+): Flow<ChatCompletionChunk>
 ```
 
-**Parameters:**
-- `request` - The chat completion request configuration
-- `callback` - Callback for streaming tokens
-
-**Example:**
 ```kotlin
-val responseBuilder = StringBuilder()
-
-chatClient.completeChatStreaming(request, 
-    object : IFoundryOperationProgressCallback.Stub() {
-        override fun onProgressUpdate(
-            operationType: Int,
-            modelAlias: String,
-            status: Int,
-            progressPercent: Int,
-            message: String
-        ) {
-            responseBuilder.append(message)
-            updateUI(responseBuilder.toString())
-        }
-        
-        override fun onOperationComplete(
-            operationType: Int,
-            modelAlias: String,
-            successful: Boolean,
-            errorMessage: String?
-        ) {
-            // Streaming complete
-        }
+suspend fun streamChat(chatClient: ChatClient, request: ChatCompletionRequest) {
+    chatClient.completeChatStreaming(request).collect { chunk ->
+        appendText(chunk.delta)
     }
-)
-```
-
-> **Tip**: You can also use `FoundryOperationProgressCallbackAdapter` for simpler callback implementations when you don't need to handle every callback method.
-
----
-
-## ChatCompletionRequest
-
-Configuration for a chat completion request.
-
-```kotlin
-class ChatCompletionRequest
-```
-
-### Properties
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `messages` | `MutableList<ChatMessage>` | Empty list | Conversation history |
-| `temperature` | `Float?` | `null` | Sampling temperature (0.0 - 2.0) |
-| `maxTokens` | `Int?` | `null` | Maximum tokens to generate |
-| `topP` | `Float?` | `null` | Nucleus sampling threshold (0.0 - 1.0) |
-| `topK` | `Int?` | `null` | Top-K sampling value |
-| `presencePenalty` | `Float?` | `null` | Presence penalty (-2.0 to 2.0) |
-| `frequencyPenalty` | `Float?` | `null` | Frequency penalty (-2.0 to 2.0) |
-| `stop` | `List<String>?` | `null` | Stop sequences |
-
-### Parameter Details
-
-#### temperature
-Controls randomness in responses:
-- `0.0` - Deterministic, always picks most likely token
-- `1.0` - Default/balanced randomness
-- `2.0` - Maximum randomness
-
-**Use cases:**
-- `0.0-0.3`: Factual tasks, code generation
-- `0.7-0.9`: Creative writing, conversation
-- `1.0-2.0`: Highly creative/experimental
-
-#### maxTokens
-Maximum number of tokens to generate. If not specified, generates until natural completion or model limit.
-
-#### topP (Nucleus Sampling)
-Only considers tokens whose cumulative probability is >= topP:
-- `0.1` - Very focused, deterministic
-- `0.9` - Balanced (recommended)
-- `1.0` - Considers all tokens
-
-#### topK
-Only considers the K most likely tokens:
-- Lower values (10-20): More focused
-- Higher values (40-50): More diverse
-
-#### presencePenalty
-Penalizes tokens based on whether they appear in the text:
-- Positive values: Encourage new topics
-- Negative values: Stay on topic
-
-#### frequencyPenalty
-Penalizes tokens based on their frequency:
-- Positive values: Reduce repetition
-- Negative values: Allow repetition
-
-#### stop
-List of strings that stop generation when encountered:
-```kotlin
-stop = listOf("</s>", "\n\n", "END")
-```
-
-### Example
-
-```kotlin
-val request = ChatCompletionRequest().apply {
-    messages.add(ChatMessage(ChatMessage.Role.SYSTEM, "You are a helpful assistant."))
-    messages.add(ChatMessage(ChatMessage.Role.USER, "Tell me about AI"))
-    
-    temperature = 0.8f
-    maxTokens = 200
-    topP = 0.9f
-    topK = 40
-    presencePenalty = 0.1f
-    frequencyPenalty = 0.1f
-    stop = listOf("</s>")
 }
 ```
 
----
+Cancel the collecting coroutine to stop generation.
 
-## ChatMessage
+## Chat data types
 
-Represents a single message in a conversation.
+### ChatCompletionRequest
 
 ```kotlin
-class ChatMessage(
-    var role: Role,
-    var content: String
+data class ChatCompletionRequest(
+    val messages: List<ChatMessage>,
+    val temperature: Float? = null,
+    val maxTokens: Int? = null,
+    val topP: Float? = null,
+    val topK: Int? = null,
+    val stop: List<String>? = null,
+    val presencePenalty: Float? = null,
+    val frequencyPenalty: Float? = null
 )
 ```
 
-### Properties
+Support and valid ranges can vary by model. Start with defaults and set an option only when the
+selected model documents it.
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `role` | `Role` | The role of the message sender |
-| `content` | `String` | The message text content |
-
-### Role Enum
+### ChatMessage
 
 ```kotlin
-enum class Role {
-    SYSTEM,     // System instructions/context
-    USER,       // User input
-    ASSISTANT   // AI assistant response
-}
-```
-
-### Role Descriptions
-
-- **SYSTEM**: Sets behavior, context, or instructions for the AI
-- **USER**: Represents user input/questions
-- **ASSISTANT**: AI-generated responses
-
-### Example
-
-```kotlin
-// System message
-val systemMsg = ChatMessage(
-    ChatMessage.Role.SYSTEM, 
-    "You are a helpful coding assistant."
-)
-
-// User message
-val userMsg = ChatMessage(
-    ChatMessage.Role.USER, 
-    "How do I reverse a string in Kotlin?"
-)
-
-// Assistant message (from previous response)
-val assistantMsg = ChatMessage(
-    ChatMessage.Role.ASSISTANT, 
-    "You can use .reversed() extension function."
+data class ChatMessage(
+    val role: String,
+    val content: String
 )
 ```
 
----
-
-## ChatCompletion
-
-Response from a chat completion request.
+Use the helpers:
 
 ```kotlin
-class ChatCompletion
+ChatMessage.system("Answer concisely.")
+ChatMessage.user("What is on-device inference?")
+ChatMessage.assistant("Inference executed on the device.")
 ```
 
-### Properties
+Role constants are `ROLE_SYSTEM`, `ROLE_USER`, and `ROLE_ASSISTANT`.
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | `String` | Unique identifier for this completion |
-| `modelAlias` | `String?` | The model that generated the response |
-| `created` | `Long` | Unix timestamp of creation |
-| `message` | `ChatMessage?` | The AI-generated response message |
-
-### Example
+### ChatCompletion
 
 ```kotlin
-val result = chatClient.completeChat(request)
-if (result.status) {
-    val completion = result.data!!
-    println("ID: ${completion.id}")
-    println("Model: ${completion.modelAlias}")
-    println("Response: ${completion.message?.content}")
-    println("Timestamp: ${completion.created}")
+data class ChatCompletion(
+    val id: String,
+    val modelAlias: String? = null,
+    val created: Long = 0,
+    val message: ChatMessage? = null
+)
+```
+
+### ChatCompletionChunk
+
+```kotlin
+data class ChatCompletionChunk(
+    val id: String,
+    val modelAlias: String? = null,
+    val created: Long = 0,
+    val delta: String = "",
+    val role: String? = null
+)
+```
+
+Concatenate `delta` values to assemble the streamed response.
+
+## AudioClient
+
+Create an audio client from a loaded audio model:
+
+```kotlin
+suspend fun createAudioClient(model: Model): AudioClient {
+    return model.createAudioClient()
 }
 ```
 
----
-
-## FLResult
-
-Generic result wrapper for SDK operations.
+### File transcription
 
 ```kotlin
-class FLResult<T>
+suspend fun transcribe(
+    request: AudioTranscriptionRequest
+): AudioTranscriptionResponse
+
+fun transcribeStreaming(
+    request: AudioTranscriptionRequest
+): Flow<AudioTranscriptionEvent>
 ```
 
-### Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `status` | `Boolean` | `true` if operation succeeded, `false` if failed |
-| `data` | `T?` | Result data (**guaranteed non-null when `status` is `true`**) |
-| `error` | `FLError?` | Error information (**guaranteed non-null when `status` is `false`**) |
-
-> **Important**: When `status` is `true`, the `data` field will never be null. You can safely use the non-null assertion operator (`!!`) after checking status.
-
-### FLError
-
 ```kotlin
-class FLError {
-    var code: Int          // Error code (see Error Codes)
-    var message: String    // Human-readable error message
-}
-```
-
-### Usage Pattern
-
-```kotlin
-val result = catalog.getModel("model-name")
-
-if (result.status) {
-    // Success - data is guaranteed non-null
-    val model = result.data!!
-    // Use model
-} else {
-    // Failure - error is guaranteed non-null
-    val error = result.error!!
-    Log.e(TAG, "Error ${error.code}: ${error.message}")
-}
-```
-
----
-
-## Callbacks
-
-### FoundryServiceConnectionCallback
-
-Callback for service connection state changes.
-
-```kotlin
-interface FoundryServiceConnectionCallback {
-    fun onServiceConnected(service: IFoundryLocalManager)
-    
-    fun onServiceDisconnected(
-        errorCode: ErrorCode, 
-        message: String?
+suspend fun transcribe(audioClient: AudioClient, audioFile: File): String {
+    val response = audioClient.transcribe(
+        AudioTranscriptionRequest(
+            filePath = audioFile.absolutePath,
+            language = "en"
+        )
     )
-    
-    enum class ErrorCode {
-        UNKNOWN,
-        SERVICE_NOT_FOUND,
-        PERMISSION_DENIED,
-        CONNECTION_LOST
+    return response.text
+}
+```
+
+The calling app must be able to read the supplied file path. In IPC mode, the SDK opens the file and
+passes a file descriptor to the service, so the service does not need direct filesystem access.
+Follow the sample application for the supported file-selection and storage flow.
+
+### Real-time transcription
+
+```kotlin
+suspend fun createStreamSession(
+    settings: AudioStreamSettings
+): AudioStreamSession
+```
+
+```kotlin
+suspend fun startLiveTranscription(audioClient: AudioClient): AudioStreamSession {
+    return audioClient.createStreamSession(AudioStreamSettings())
+}
+
+suspend fun pushAudio(
+    session: AudioStreamSession,
+    audioBytes: ByteArray
+): AudioStreamResult {
+    return session.pushAudioChunk(audioBytes)
+}
+
+suspend fun stopLiveTranscription(
+    session: AudioStreamSession
+): AudioStreamResult {
+    return session.stop()
+}
+```
+
+Create one session when capture starts, reuse it for each audio buffer, and call `stop()` once when
+capture ends. Do not push additional audio after `stop()`.
+
+## Audio data types
+
+```kotlin
+data class AudioTranscriptionRequest(
+    val filePath: String,
+    val language: String? = null,
+    val temperature: Float? = null
+)
+
+data class AudioTranscriptionResponse(
+    val text: String,
+    val language: String? = null,
+    val duration: Double? = null
+)
+
+data class AudioTranscriptionEvent(
+    val text: String,
+    val isFinal: Boolean = false,
+    val language: String? = null
+)
+
+data class AudioStreamSettings(
+    val sampleRate: Int = 16000,
+    val channels: Int = 1,
+    val bitsPerSample: Int = 16,
+    val language: String? = null
+)
+
+data class AudioStreamResult(
+    val text: String = "",
+    val isFinal: Boolean = false
+)
+```
+
+## ModelInfo
+
+`ModelInfo` describes a catalog model:
+
+```kotlin
+data class ModelInfo(
+    val alias: String,
+    val name: String,
+    val displayName: String,
+    val version: String,
+    val fileSizeMb: Long,
+    val task: String? = null,
+    val deviceType: String? = null,
+    val executionProvider: String? = null,
+    val supportsToolCalling: Boolean = false,
+    val maxOutputTokens: Int = 0,
+    val minFLVersion: String? = null,
+    val createdAt: Long = 0,
+    val providerType: String? = null,
+    val uri: String? = null,
+    val modelType: String? = null,
+    val publisher: String? = null,
+    val license: String? = null,
+    val licenseDescription: String? = null,
+    val promptTemplate: PromptTemplate? = null
+)
+```
+
+Treat optional fields as nullable catalog metadata. Use `alias` for subsequent catalog operations.
+
+## PromptTemplate
+
+`PromptTemplate` contains optional templates provided by catalog metadata:
+
+```kotlin
+data class PromptTemplate(
+    val system: String? = null,
+    val user: String? = null,
+    val assistant: String? = null,
+    val prompt: String? = null
+)
+```
+
+The fields represent the system message, user message, assistant response, and complete prompt
+templates respectively. Treat every field as optional.
+
+## Runtime information
+
+### VersionInfo
+
+```kotlin
+data class VersionInfo(
+    val versionName: String,
+    val versionCode: Long,
+    val minClientVersionName: String,
+    val minClientVersionCode: Long
+)
+```
+
+### CompatibilityInfo
+
+```kotlin
+data class CompatibilityInfo(
+    val isCompatible: Boolean,
+    val sdkVersion: String,
+    val appVersion: String,
+    val message: String
+)
+```
+
+`CompatibilityInfo` reports the SDK and runtime versions evaluated by
+`manager.checkCompatibility()`.
+
+## Errors
+
+```kotlin
+class FoundryLocalException(
+    message: String,
+    val errorCode: Int = 0,
+    cause: Throwable? = null
+) : Exception(message, cause)
+```
+
+Catch `FoundryLocalException` for SDK failures. Do not swallow coroutine cancellation:
+
+```kotlin
+suspend fun loadModel(model: Model) {
+    try {
+        model.load()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: FoundryLocalException) {
+        handleFoundryError(error)
     }
 }
 ```
 
-### FoundryOperationProgressCallback
-
-Callback for long-running operations (download, load, unload).
-
-```kotlin
-interface FoundryOperationProgressCallback {
-    fun onProgressUpdate(
-        operationType: OperationType,
-        modelAlias: String,
-        status: OperationStatus,
-        progressPercent: Int,
-        message: String?
-    )
-    
-    fun onOperationComplete(
-        operationType: OperationType,
-        modelAlias: String,
-        successful: Boolean,
-        errorMessage: String?
-    )
-    
-    enum class OperationType {
-        DOWNLOAD,
-        LOAD,
-        UNLOAD,
-        INFERENCE
-    }
-    
-    enum class OperationStatus {
-        STARTED,
-        IN_PROGRESS,
-        COMPLETED,
-        FAILED
-    }
-}
-```
-
-### FoundryOperationProgressCallbackAdapter
-
-An adapter class that provides default (no-op) implementations of `FoundryOperationProgressCallback` methods. Extend this class and override only the methods you need.
-
-```kotlin
-open class FoundryOperationProgressCallbackAdapter : FoundryOperationProgressCallback {
-    override fun onProgressUpdate(
-        operationType: FoundryOperationProgressCallback.OperationType,
-        modelAlias: String,
-        status: FoundryOperationProgressCallback.OperationStatus,
-        progressPercent: Int,
-        message: String?
-    ) { /* no-op */ }
-    
-    override fun onOperationComplete(
-        operationType: FoundryOperationProgressCallback.OperationType,
-        modelAlias: String,
-        successful: Boolean,
-        errorMessage: String?
-    ) { /* no-op */ }
-}
-```
-
-**Example:**
-```kotlin
-// Only handle completion, skip progress updates
-model.load(object : FoundryOperationProgressCallbackAdapter() {
-    override fun onOperationComplete(
-        operationType: FoundryOperationProgressCallback.OperationType,
-        modelAlias: String,
-        successful: Boolean,
-        errorMessage: String?
-    ) {
-        if (successful) {
-            Log.d(TAG, "Model loaded")
-        }
-    }
-})
-```
-
----
-
-## Audio Transcription
-
-Audio transcription client API support was added in **SDK 0.1.3**. It provides three
-transcription modes: file-based synchronous, file-based streaming, and real-time PCM
-streaming.
-
-> **Note:** Runtime support also depends on the installed Foundry Local App (service)
-> build implementing and enabling audio transcription. Even when using SDK 0.1.3 or
-> later, calls may fail with `NOT_IMPLEMENTED` (`501`) if the service build does not support
-> this feature.
-
-### FoundryAudioTranscriptionClient
-
-Client for running audio transcription inference against a loaded model.
-
-```kotlin
-class FoundryAudioTranscriptionClient
-```
-
-Obtain instances via `FoundryModel.createAudioTranscriptionClient()`.
-
-#### transcribeAudio()
-
-Transcribes an audio file synchronously.
-
-```kotlin
-fun transcribeAudio(request: AudioTranscriptionRequest): FLResult<AudioTranscriptionResponse>
-```
-
-**Parameters:**
-- `request` - The transcription request with file path and optional parameters
-
-**Returns:** `FLResult<AudioTranscriptionResponse>` - Result containing the transcription
-
-**Example:**
-```kotlin
-val request = AudioTranscriptionRequest("/path/to/audio.mp3").apply {
-    language = "en"
-    temperature = 0.0f
-}
-val result = audioClient.transcribeAudio(request)
-if (result.status) {
-    val text = result.data!!.text
-    println("Transcription: $text")
-}
-```
-
-#### transcribeAudioStreaming()
-
-Transcribes an audio file with streaming results via callback.
-
-```kotlin
-fun transcribeAudioStreaming(
-    request: AudioTranscriptionRequest,
-    callback: AudioTranscriptionCallback
-): FLResult<Boolean>
-```
-
-**Parameters:**
-- `request` - The transcription request with file path and optional parameters
-- `callback` - An `AudioTranscriptionCallback` to receive streaming results
-
-**Returns:** `FLResult<Boolean>` - `true` if the streaming operation started successfully
-
-**Example:**
-```kotlin
-val callback = object : AudioTranscriptionCallback {
-    override fun onPartialResult(text: String) {
-        println("Partial: $text")
-    }
-    override fun onFinalResult(response: AudioTranscriptionResponse) {
-        println("Final: ${response.text}")
-    }
-    override fun onError(errorMessage: String) {
-        println("Error: $errorMessage")
-    }
-}
-audioClient.transcribeAudioStreaming(request, callback)
-```
-
-#### startStream()
-
-Starts a real-time streaming transcription session for live audio input.
-
-```kotlin
-fun startStream(settings: AudioStreamSettings): FLResult<String>
-```
-
-**Parameters:**
-- `settings` - PCM format settings (sample rate, channels, bits per sample, language)
-
-**Returns:** `FLResult<String>` - A session handle to use with `pushAudioChunk()` and `stopStream()`
-
-#### pushAudioChunk()
-
-Pushes a chunk of PCM audio data to an active streaming session.
-
-```kotlin
-fun pushAudioChunk(sessionHandle: String, audioData: ByteArray): FLResult<AudioStreamResult>
-```
-
-**Parameters:**
-- `sessionHandle` - The session handle returned by `startStream()`
-- `audioData` - Raw PCM audio bytes (must be ≤ 512 KB)
-
-**Returns:** `FLResult<AudioStreamResult>` - Partial transcription result (`isFinal = false`)
-
-#### stopStream()
-
-Stops the streaming session and returns the final transcript.
-
-```kotlin
-fun stopStream(sessionHandle: String): FLResult<AudioStreamResult>
-```
-
-**Parameters:**
-- `sessionHandle` - The session handle returned by `startStream()`
-
-**Returns:** `FLResult<AudioStreamResult>` - Final transcription result (`isFinal = true`)
-
-**Real-Time Streaming Example:**
-```kotlin
-// 1. Start a streaming session
-val settings = AudioStreamSettings().apply {
-    sampleRate = 16000
-    channels = 1
-    bitsPerSample = 16
-    language = "en"
-}
-val sessionResult = audioClient.startStream(settings)
-if (!sessionResult.status) {
-    println("Error: ${sessionResult.error?.message}")
-    return
-}
-val sessionHandle = sessionResult.data!!
-
-// 2. Push PCM audio chunks as they are recorded
-val pcmData: ByteArray = byteArrayOf() // Replace with actual audio data from AudioRecord
-val partialResult = audioClient.pushAudioChunk(sessionHandle, pcmData)
-if (partialResult.status) {
-    println("Partial: ${partialResult.data!!.text}")
-}
-
-// 3. Stop and get the final transcript
-val finalResult = audioClient.stopStream(sessionHandle)
-if (finalResult.status) {
-    println("Final: ${finalResult.data!!.text}")
-}
-```
-
-### AudioTranscriptionCallback
-
-Callback interface for streaming audio transcription results.
-
-```kotlin
-interface AudioTranscriptionCallback {
-    fun onPartialResult(text: String)
-    fun onFinalResult(response: AudioTranscriptionResponse)
-    fun onError(errorMessage: String)
-}
-```
-
-| Method | Description |
-|--------|-------------|
-| `onPartialResult(text)` | Called with partial transcription text as it becomes available |
-| `onFinalResult(response)` | Called with the final complete transcription result |
-| `onError(errorMessage)` | Called when an error occurs during transcription |
-
-> **Note:** Callbacks are invoked on a binder thread. Post to the main thread before updating UI.
-
-### AudioTranscriptionRequest
-
-Request to transcribe an audio file.
-
-```kotlin
-val request = AudioTranscriptionRequest("/absolute/path/to/audio.mp3").apply {
-    language = "en"
-    temperature = 0.0f
-}
-```
-
-#### Properties
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `filePath` | `String` | *(required)* | Absolute path to the audio file. Must be accessible to the Foundry Local service process. |
-| `language` | `String?` | `null` | BCP-47 language hint (e.g., `"en"`, `"es"`). `null` uses auto-detection. |
-| `temperature` | `Float?` | `null` | Sampling temperature (0.0–1.0). `null` uses model default. |
-
-> **Important:** The file must be accessible to the Foundry Local service process. See `AudioTranscriptionRequest` class docs for guidance on scoped storage.
-
-### AudioTranscriptionResponse
-
-Response from an audio transcription request.
-
-```kotlin
-class AudioTranscriptionResponse : Parcelable
-```
-
-#### Properties
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `text` | `String` | `""` | The transcribed text content |
-| `language` | `String?` | `null` | Detected or specified language (BCP-47 code) |
-| `duration` | `Double?` | `null` | Duration of the audio in seconds |
-
-### AudioStreamSettings
-
-Settings for starting a real-time streaming transcription session.
-
-```kotlin
-class AudioStreamSettings : Parcelable
-```
-
-#### Properties
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `sampleRate` | `Int` | `16000` | PCM sample rate in Hz |
-| `channels` | `Int` | `1` | Number of audio channels (1 = mono, 2 = stereo) |
-| `bitsPerSample` | `Int` | `16` | Bits per audio sample |
-| `language` | `String?` | `null` | BCP-47 language hint. `null` uses auto-detection. |
-
-### AudioStreamResult
-
-Result from a real-time streaming transcription operation.
-
-```kotlin
-class AudioStreamResult : Parcelable
-```
-
-#### Properties
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `text` | `String` | `""` | Transcribed text (partial or complete) |
-| `isFinal` | `Boolean` | `false` | `true` for final result after `stopStream()`, `false` for intermediate results |
-
----
-
-## Error Codes
-
-Standard error codes used throughout the SDK.
-
-| Code | Constant | Description |
-|------|----------|-------------|
-| 400 | `BAD_REQUEST` | Invalid arguments or malformed request |
-| 403 | `FORBIDDEN` | Security/permission violation |
-| 404 | `NOT_FOUND` | Resource not found |
-| 500 | `INTERNAL_ERROR` | Generic internal server error |
-| 501 | `NOT_IMPLEMENTED` | Feature not implemented in the installed App build |
-| 502 | `REMOTE_ERROR` | Remote service/IPC failure |
-| 503 | `SERVICE_UNAVAILABLE` | Service temporarily unavailable |
-| 510 | `BINDER_CONVERSION_ERROR` | Failed to convert binder to interface |
-| 599 | `UNKNOWN_ERROR` | Unknown/unexpected error |
----
-
-## See Also
-
-- [Integration Guide](INTEGRATION_GUIDE.md) - Quick start and basic integration
-- [Examples](EXAMPLES.md) - Complete code examples
-- [Best Practices](BEST_PRACTICES.md) - Development guidelines
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
+Do not depend on undocumented numeric error codes. Use documented codes only when a release defines
+their meaning, and always retain a fallback based on the exception message and operation context.
+
+## See also
+
+- [Integration Guide](INTEGRATION_GUIDE.md)
+- [Examples](EXAMPLES.md)
+- [Best Practices](BEST_PRACTICES.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+- [IPC and embedded deployment modes](IPC_AND_EMBEDDED_MODES.md)
