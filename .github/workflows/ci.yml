@@ -95,15 +95,38 @@ jobs:
             throw "Sample module layout does not match the public allowlist.`nExpected:`n$($expectedBuildFiles -join "`n")`nActual:`n$($actualBuildFiles -join "`n")"
           }
 
+          $expectedProjectDirectories = [ordered]@{
+            ":ApiExplorerAppIPC" = "examples/ipc/ApiExplorerAppIPC"
+            ":AudioTranscriptionAppEmbedded" = "examples/embedded/AudioTranscriptionAppEmbedded"
+            ":ChatAppEmbedded" = "examples/embedded/ChatAppEmbedded"
+          }
+          $settingsText = Get-Content settings.gradle.kts -Raw
+          $mappingPattern = 'project\("(?<name>:[^"]+)"\)\.projectDir\s*=\s*file\("(?<path>[^"]+)"\)'
+          $actualProjectDirectories = @{}
+          foreach ($match in [regex]::Matches($settingsText, $mappingPattern)) {
+            $name = $match.Groups["name"].Value
+            if ($actualProjectDirectories.ContainsKey($name)) {
+              throw "Duplicate projectDir registration for $name."
+            }
+            $actualProjectDirectories[$name] = $match.Groups["path"].Value
+          }
+          $expectedProjectNames = @($expectedProjectDirectories.Keys | Sort-Object)
+          $actualProjectNames = @($actualProjectDirectories.Keys | Sort-Object)
+          if (Compare-Object $expectedProjectNames $actualProjectNames) {
+            throw "Registered projectDir names do not match the public allowlist."
+          }
+          foreach ($entry in $expectedProjectDirectories.GetEnumerator()) {
+            $actualDirectory = $actualProjectDirectories[$entry.Key]
+            if ($actualDirectory -ne $entry.Value) {
+              throw "Project $($entry.Key) maps to '$actualDirectory'; expected '$($entry.Value)'."
+            }
+          }
+
           $projectsOutput = & ./gradlew projects --no-daemon --quiet
           if ($LASTEXITCODE -ne 0) {
             throw "Gradle project discovery failed with exit code $LASTEXITCODE."
           }
-          $expectedProjects = @(
-            ":ApiExplorerAppIPC",
-            ":AudioTranscriptionAppEmbedded",
-            ":ChatAppEmbedded"
-          )
+          $expectedProjects = $expectedProjectNames
           $actualProjects = @(
             $projectsOutput |
               ForEach-Object {
