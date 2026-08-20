@@ -76,4 +76,43 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Verify Gradle project configuration
-        run: ./gradlew projects --no-daemon --quiet
+        shell: pwsh
+        run: |
+          $expectedBuildFiles = @(
+            "examples/embedded/AudioTranscriptionAppEmbedded/build.gradle.kts",
+            "examples/embedded/ChatAppEmbedded/build.gradle.kts",
+            "examples/ipc/ApiExplorerAppIPC/build.gradle.kts"
+          )
+          $repositoryRoot = (Get-Location).Path
+          $actualBuildFiles = @(
+            Get-ChildItem examples -Recurse -File -Filter build.gradle.kts |
+              ForEach-Object {
+                $_.FullName.Substring($repositoryRoot.Length + 1).Replace('\', '/')
+              } |
+              Sort-Object
+          )
+          if (Compare-Object $expectedBuildFiles $actualBuildFiles) {
+            throw "Sample module layout does not match the public allowlist.`nExpected:`n$($expectedBuildFiles -join "`n")`nActual:`n$($actualBuildFiles -join "`n")"
+          }
+
+          $projectsOutput = & ./gradlew projects --no-daemon --quiet
+          if ($LASTEXITCODE -ne 0) {
+            throw "Gradle project discovery failed with exit code $LASTEXITCODE."
+          }
+          $expectedProjects = @(
+            ":ApiExplorerAppIPC",
+            ":AudioTranscriptionAppEmbedded",
+            ":ChatAppEmbedded"
+          )
+          $actualProjects = @(
+            $projectsOutput |
+              ForEach-Object {
+                if ($_ -match "Project '(:[^']+)'") {
+                  $Matches[1]
+                }
+              } |
+              Sort-Object -Unique
+          )
+          if (Compare-Object $expectedProjects $actualProjects) {
+            throw "Registered Gradle projects do not match the public allowlist.`nExpected:`n$($expectedProjects -join "`n")`nActual:`n$($actualProjects -join "`n")"
+          }

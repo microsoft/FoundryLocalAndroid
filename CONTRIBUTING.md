@@ -28,11 +28,9 @@ IPC example. Place `foundry-local-embedded-sdk-{version}.aar` in
 the `libs/` directory of each Embedded example.
 
 ```bash
-./gradlew :ApiExplorerApp:assembleDebug
-./gradlew :ChatApp:assembleDebug
-./gradlew :AudioTranscriptionApp:assembleDebug
-./gradlew :EmbeddedChatApp:assembleDebug
-./gradlew :EmbeddedAudioTranscriptionApp:assembleDebug
+./gradlew :ApiExplorerAppIPC:assembleDebug
+./gradlew :ChatAppEmbedded:assembleDebug
+./gradlew :AudioTranscriptionAppEmbedded:assembleDebug
 ```
 
 SDK AARs and other generated binaries must not be committed.

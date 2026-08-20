@@ -20,17 +20,12 @@ dependencyResolutionManagement {
 
 rootProject.name = "FoundryLocalAndroid"
 
-include(":ApiExplorerApp")
-project(":ApiExplorerApp").projectDir = file("examples/ApiExplorerApp")
+include(":ApiExplorerAppIPC")
+project(":ApiExplorerAppIPC").projectDir = file("examples/ipc/ApiExplorerAppIPC")
 
-include(":ChatApp")
-project(":ChatApp").projectDir = file("examples/ChatApp")
+include(":ChatAppEmbedded")
+project(":ChatAppEmbedded").projectDir = file("examples/embedded/ChatAppEmbedded")
 
-include(":AudioTranscriptionApp")
-project(":AudioTranscriptionApp").projectDir = file("examples/AudioTranscriptionApp")
-
-include(":EmbeddedChatApp")
-project(":EmbeddedChatApp").projectDir = file("examples/EmbeddedChatApp")
-
-include(":EmbeddedAudioTranscriptionApp")
-project(":EmbeddedAudioTranscriptionApp").projectDir = file("examples/EmbeddedAudioTranscriptionApp")
+include(":AudioTranscriptionAppEmbedded")
+project(":AudioTranscriptionAppEmbedded").projectDir =
+    file("examples/embedded/AudioTranscriptionAppEmbedded")
