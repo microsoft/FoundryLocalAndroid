@@ -530,6 +530,7 @@ class EmbeddedChatViewModel : ViewModel() {
                             withContext(NonCancellable + Dispatchers.Main) {
                                 if (finalResult.text.isNotEmpty()) {
                                     voiceTranscript = finalResult.text
+                                        .replace(Regex("\\s+"), " ").trim()
                                 }
                             }
                         } catch (e: Exception) {
