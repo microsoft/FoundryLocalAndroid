@@ -25,7 +25,7 @@ Chat interface running entirely in-process using Foundry Local embedded mode —
    ./gradlew :ChatAppEmbedded:installDebug
    ```
 
-> **Good to know:** Release AARs are not committed to the public repository. Place the verified
+> **Good to know:** Release AARs are not committed to this repository. Place the verified
 > embedded AAR in this sample's `libs/` directory before building.
 
 ## Permissions
