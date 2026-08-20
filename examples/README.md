@@ -27,8 +27,8 @@ Run all commands from the repository root.
 1. Download `foundry-local-embedded-sdk-<version>.aar` from the matching GitHub Release, verify its
    published SHA-256 hash, and place it in the example's `libs/` directory. No service app is required.
 
-Release AARs are published as GitHub Release assets and are not committed to the public repository.
-Public CI downloads, verifies, and temporarily injects them into each sample's `libs/` directory.
+Release AARs are not committed to the public repository. Each sample expects the verified AAR in its
+`libs/` directory at build time.
 
 See the [Integration Guide](../docs/INTEGRATION_GUIDE.md#prerequisites) for SDK distribution and setup details.
 

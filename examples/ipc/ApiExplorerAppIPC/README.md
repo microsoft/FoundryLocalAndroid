@@ -39,8 +39,8 @@ The application supplies `modelAlias` from its model selection or configuration.
 7. Remove the cached model with `removeFromCache()`
 8. Recover after disconnects with `isConnected` and `reconnect()`
 
-> **Good to know:** Release AARs are GitHub Release assets and are not committed to the public
-> repository. Public CI temporarily injects the verified AAR when building this sample.
+> **Good to know:** Release AARs are not committed to the public repository. Place the verified IPC
+> AAR in this sample's `libs/` directory before building.
 
 ## Setup
 
