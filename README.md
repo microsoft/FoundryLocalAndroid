@@ -2,7 +2,7 @@
   <img alt="Foundry Local Android" src="assets/ic_launcher.png" height="100">
 
   <h1>Foundry Local for Android</h1>
-  <p><strong>Run generative AI models directly on Android devices.</strong></p>
+  <p><strong>Run generative AI models directly on Android devices — no cloud, no cost per request, fully private.</strong></p>
 
   <p>
     <a href="#quick-start">Quick Start</a> •
@@ -33,6 +33,8 @@ suspend fun runChat(context: Context, modelAlias: String) {
 }
 ```
 
+That's it — model downloaded, loaded, and generating text on-device.
+
 The application supplies `modelAlias` from its model selection or configuration.
 
 > **Running on Windows or macOS?** See [Foundry Local](https://github.com/microsoft/Foundry-Local).
@@ -42,14 +44,8 @@ The application supplies `modelAlias` from its model selection or configuration.
 ## How It Works
 
 Foundry Local runs AI models on the Android device. Choose one deployment mode:
-
-- **IPC mode** — Your app includes a client AAR with no native inference engine. Inference runs in
-  the Foundry Local service app, a separate process. This keeps the app package smaller but requires
-  the [Foundry Local App](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app).
-  Each client app has an isolated model copy.
-- **Embedded mode** — Your app includes an AAR that packages the inference engine and native
-  libraries. It requires no service app, increases the application package size, and runs inference
-  in your app process.
+- **IPC mode** — Your app includes a thin SDK library (no native code). Inference runs in the Foundry Local service app, a separate process. This mode keeps your APK small, provided the [Foundry Local App](https://play.google.com/store/apps/details?id=com.microsoft.foundrylocal.app) has been downloaded. Preferred if you have strict APK size limitations.
+- **Embedded mode** — Your app bundles the full inference engine including native libraries. No Foundry Local service app needed. Fully self-contained. Preferred if your app must work without depending on other installed apps
 
 Both modes expose the same Kotlin API. Their installation, packaging, process, storage, and lifecycle
 behavior differ.
