@@ -18,9 +18,9 @@ jobs:
     name: Verify public repository boundary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: gradle/actions/wrapper-validation@v4
+      - uses: gradle/actions/wrapper-validation@v6
 
       - name: Verify source and binary boundary
         shell: pwsh
@@ -73,7 +73,7 @@ jobs:
           distribution: microsoft
           java-version: "17"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Verify Gradle project configuration
         run: ./gradlew projects --no-daemon --quiet
