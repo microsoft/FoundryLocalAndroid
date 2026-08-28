@@ -23,6 +23,10 @@ rootProject.name = "FoundryLocalAndroid"
 include(":ApiExplorerAppIPC")
 project(":ApiExplorerAppIPC").projectDir = file("examples/ipc/ApiExplorerAppIPC")
 
+include(":AudioTranscriptionAppIPC")
+project(":AudioTranscriptionAppIPC").projectDir =
+    file("examples/ipc/AudioTranscriptionAppIPC")
+
 include(":ChatAppEmbedded")
 project(":ChatAppEmbedded").projectDir = file("examples/embedded/ChatAppEmbedded")
 

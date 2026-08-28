@@ -29,6 +29,7 @@ the `libs/` directory of each Embedded example.
 
 ```bash
 ./gradlew :ApiExplorerAppIPC:assembleDebug
+./gradlew :AudioTranscriptionAppIPC:assembleDebug
 ./gradlew :ChatAppEmbedded:assembleDebug
 ./gradlew :AudioTranscriptionAppEmbedded:assembleDebug
 ```

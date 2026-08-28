@@ -9,6 +9,7 @@ Standalone example apps demonstrating different capabilities of the Foundry Loca
 | App | Description | Key SDK Features |
 |-----|-------------|-----------------|
 | [ApiExplorerAppIPC](ipc/ApiExplorerAppIPC/) | Interactive SDK API reference (modern API) | Full lifecycle: connect, catalog, download, load, chat, unload, cache management |
+| [AudioTranscriptionAppIPC](ipc/AudioTranscriptionAppIPC/) | Audio transcription using IPC mode | File, streaming, and live audio transcription through the service app |
 | [ChatAppEmbedded](embedded/ChatAppEmbedded/) | Chat with voice input using embedded mode ([setup](embedded/ChatAppEmbedded/README.md#prerequisites)) | In-process inference, no service app needed, streaming audio transcription |
 | [AudioTranscriptionAppEmbedded](embedded/AudioTranscriptionAppEmbedded/) | Audio transcription using embedded mode | In-process audio transcription, no service app needed |
 

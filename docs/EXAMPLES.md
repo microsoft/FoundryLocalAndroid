@@ -17,6 +17,8 @@ The repository includes complete applications that use the shared API:
 
 - [ApiExplorerAppIPC](../examples/ipc/ApiExplorerAppIPC) — connection, catalog, model download and
   cancellation, load and unload, chat, streaming, reconnection, and cache removal
+- [AudioTranscriptionAppIPC](../examples/ipc/AudioTranscriptionAppIPC) — file, streaming, and live
+  audio transcription through the service app
 
 ### Embedded mode
 

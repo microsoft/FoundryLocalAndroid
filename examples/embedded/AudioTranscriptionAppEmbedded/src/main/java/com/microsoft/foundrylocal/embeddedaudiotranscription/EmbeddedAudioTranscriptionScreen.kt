@@ -265,6 +265,14 @@ private fun FileTranscriptionTab(viewModel: EmbeddedAudioTranscriptionViewModel)
                     Text(viewModel.selectedFileName ?: "Select audio file")
                 }
 
+                TextButton(
+                    onClick = { viewModel.useSampleAudio(context) },
+                    enabled = !viewModel.isTranscribing,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Use sample audio")
+                }
+
                 Text(
                     "Supported: MP3, M4A, AAC, FLAC, OGG, and most WAV files.",
                     style = MaterialTheme.typography.bodySmall,
@@ -450,15 +458,17 @@ private fun ModelStatusCard(
 
 @Composable
 private fun ResultCard(title: String, text: String, placeholder: String) {
+    val displayedText = text.trim().ifBlank { placeholder }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, fontWeight = FontWeight.SemiBold)
             Text(
-                text.ifBlank { placeholder },
+                displayedText,
                 color = if (text.isBlank()) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {

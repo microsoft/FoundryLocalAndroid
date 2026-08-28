@@ -124,6 +124,8 @@ For detailed setup instructions, see the [Integration Guide](docs/INTEGRATION_GU
 
 - [ApiExplorerAppIPC](examples/ipc/ApiExplorerAppIPC/) — connection, catalog, model lifecycle, chat,
   streaming, reconnection, and cache removal using the shared API
+- [AudioTranscriptionAppIPC](examples/ipc/AudioTranscriptionAppIPC/) — file, streaming, and live audio
+  transcription through the service app
 
 ### Embedded mode
 

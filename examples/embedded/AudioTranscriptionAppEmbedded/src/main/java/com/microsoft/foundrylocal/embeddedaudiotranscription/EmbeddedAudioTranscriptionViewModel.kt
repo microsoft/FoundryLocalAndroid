@@ -237,6 +237,32 @@ class EmbeddedAudioTranscriptionViewModel : ViewModel() {
         }
     }
 
+    /** Copies the bundled sample into cache so it follows the same transcription path. */
+    fun useSampleAudio(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val name = "sample_audio.mp3"
+                val cacheFile = File(context.cacheDir, name)
+                context.resources.openRawResource(R.raw.sample_audio).use { input ->
+                    cacheFile.outputStream().use { output -> input.copyTo(output) }
+                }
+
+                selectedFilePath = cacheFile.absolutePath
+                withContext(Dispatchers.Main) {
+                    selectedFileName = name
+                    transcriptionResult = ""
+                    fileError = null
+                }
+                Log.i(TAG, "Sample audio copied to cache (${cacheFile.length()} bytes)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Sample audio error", e)
+                withContext(Dispatchers.Main) {
+                    fileError = e.message ?: e.javaClass.simpleName
+                }
+            }
+        }
+    }
+
     private fun sanitizeDisplayName(displayName: String?): String {
         val basename = displayName.orEmpty()
             .substringAfterLast('/')
