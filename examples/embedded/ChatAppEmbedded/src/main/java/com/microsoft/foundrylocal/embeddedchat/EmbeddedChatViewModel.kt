@@ -542,6 +542,7 @@ class EmbeddedChatViewModel : ViewModel() {
                             }
                             isListening = false
                             streamSession = null
+                            streamingJob = null
                         }
                     }
                 }
@@ -559,32 +560,36 @@ class EmbeddedChatViewModel : ViewModel() {
     }
 
     fun stopVoiceInput() {
-        isListening = false
         isStreamCaptureActive.set(false)
         runCatching { listenJob?.cancel() }
         listenJob = null
         runCatching { audioChunkChannel?.close() }
         runCatching { captureJob?.cancel() }
-        runCatching { streamingJob?.cancel() }
-
-        // Fallback: if streamingJob's finally didn't clean up (e.g. never started),
-        // stop the session after a short delay
-        val session = streamSession
-        if (session != null) {
-            viewModelScope.launch(Dispatchers.IO) {
-                kotlinx.coroutines.delay(500)
-                if (streamSession === session) {
-                    streamSession = null
-                    runCatching { session.stop() }
-                }
-            }
-        }
 
         val recorder = audioRecord
         audioRecord = null
         if (recorder != null) {
             runCatching { recorder.stop() }
             runCatching { recorder.release() }
+        }
+
+        // Closing the channel lets an active push job drain buffered audio before it stops.
+        if (streamingJob == null) {
+            val session = streamSession
+            if (session != null) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    kotlinx.coroutines.delay(500)
+                    if (streamingJob == null && streamSession === session) {
+                        streamSession = null
+                        runCatching { session.stop() }
+                        withContext(Dispatchers.Main) {
+                            isListening = false
+                        }
+                    }
+                }
+            } else {
+                isListening = false
+            }
         }
     }
 
