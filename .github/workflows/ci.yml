@@ -1,0 +1,145 @@
+name: Repository checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-boundary:
+    name: Verify public repository boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: gradle/actions/wrapper-validation@v4
+
+      - name: Verify source and binary boundary
+        shell: pwsh
+        run: |
+          $forbiddenDirectories = @(
+            "common",
+            "ipc-service",
+            "embedded-sdk",
+            "experimental",
+            "testing"
+          )
+          foreach ($directory in $forbiddenDirectories) {
+            if (Test-Path $directory) {
+              throw "Forbidden implementation directory is present: $directory"
+            }
+          }
+
+          $implementationSource = git ls-files | Where-Object {
+            $_ -match '\.(kt|java|aidl|c|cc|cpp|h|hpp)$' -and
+            $_ -notmatch '^examples/'
+          }
+          if ($implementationSource) {
+            throw "Implementation source outside examples is not allowed:`n$($implementationSource -join "`n")"
+          }
+
+          $binaries = git ls-files | Where-Object {
+            $_ -match '\.(aar|apk|aab|so|dll|dylib|zip|a|o|bin|onnx|gguf|safetensors|jar)$' -and
+            $_ -ne 'gradle/wrapper/gradle-wrapper.jar'
+          }
+          if ($binaries) {
+            throw "Committed binaries are not allowed:`n$($binaries -join "`n")"
+          }
+
+          $oversized = git ls-tree -r -l --full-tree HEAD | ForEach-Object {
+            if ($_ -match '^\d+\s+\w+\s+[0-9a-f]+\s+(\d+)\s+(.+)$') {
+              [pscustomobject]@{
+                Size = [long]$Matches[1]
+                Path = $Matches[2]
+              }
+            }
+          } | Where-Object {
+            $_.Size -gt 5MB
+          } | Select-Object -ExpandProperty Path
+          if ($oversized) {
+            throw "Tracked files larger than 5 MB require explicit review:`n$($oversized -join "`n")"
+          }
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: microsoft
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Verify Gradle project configuration
+        shell: pwsh
+        run: |
+          $expectedBuildFiles = @(
+            "examples/embedded/AudioTranscriptionAppEmbedded/build.gradle.kts",
+            "examples/embedded/ChatAppEmbedded/build.gradle.kts",
+            "examples/ipc/ApiExplorerAppIPC/build.gradle.kts",
+            "examples/ipc/ChatAppIPC/build.gradle.kts",
+            "examples/ipc/AudioTranscriptionAppIPC/build.gradle.kts"
+          )
+          $repositoryRoot = (Get-Location).Path
+          $actualBuildFiles = @(
+            Get-ChildItem examples -Recurse -File -Filter build.gradle.kts |
+              ForEach-Object {
+                $_.FullName.Substring($repositoryRoot.Length + 1).Replace('\', '/')
+              } |
+              Sort-Object
+          )
+          if (Compare-Object $expectedBuildFiles $actualBuildFiles) {
+            throw "Sample module layout does not match the public allowlist.`nExpected:`n$($expectedBuildFiles -join "`n")`nActual:`n$($actualBuildFiles -join "`n")"
+          }
+
+          $expectedProjectDirectories = [ordered]@{
+            ":ApiExplorerAppIPC" = "examples/ipc/ApiExplorerAppIPC"
+            ":ChatAppIPC" = "examples/ipc/ChatAppIPC"
+            ":AudioTranscriptionAppIPC" = "examples/ipc/AudioTranscriptionAppIPC"
+            ":AudioTranscriptionAppEmbedded" = "examples/embedded/AudioTranscriptionAppEmbedded"
+            ":ChatAppEmbedded" = "examples/embedded/ChatAppEmbedded"
+          }
+          $settingsText = Get-Content settings.gradle.kts -Raw
+          $mappingPattern = 'project\("(?<name>:[^"]+)"\)\.projectDir\s*=\s*file\("(?<path>[^"]+)"\)'
+          $actualProjectDirectories = @{}
+          foreach ($match in [regex]::Matches($settingsText, $mappingPattern)) {
+            $name = $match.Groups["name"].Value
+            if ($actualProjectDirectories.ContainsKey($name)) {
+              throw "Duplicate projectDir registration for $name."
+            }
+            $actualProjectDirectories[$name] = $match.Groups["path"].Value
+          }
+          $expectedProjectNames = @($expectedProjectDirectories.Keys | Sort-Object)
+          $actualProjectNames = @($actualProjectDirectories.Keys | Sort-Object)
+          if (Compare-Object $expectedProjectNames $actualProjectNames) {
+            throw "Registered projectDir names do not match the public allowlist."
+          }
+          foreach ($entry in $expectedProjectDirectories.GetEnumerator()) {
+            $actualDirectory = $actualProjectDirectories[$entry.Key]
+            if ($actualDirectory -ne $entry.Value) {
+              throw "Project $($entry.Key) maps to '$actualDirectory'; expected '$($entry.Value)'."
+            }
+          }
+
+          $projectsOutput = & ./gradlew projects --no-daemon --quiet
+          if ($LASTEXITCODE -ne 0) {
+            throw "Gradle project discovery failed with exit code $LASTEXITCODE."
+          }
+          $expectedProjects = $expectedProjectNames
+          $actualProjects = @(
+            $projectsOutput |
+              ForEach-Object {
+                if ($_ -match "Project '(:[^']+)'") {
+                  $Matches[1]
+                }
+              } |
+              Sort-Object -Unique
+          )
+          if (Compare-Object $expectedProjects $actualProjects) {
+            throw "Registered Gradle projects do not match the public allowlist.`nExpected:`n$($expectedProjects -join "`n")`nActual:`n$($actualProjects -join "`n")"
+          }
