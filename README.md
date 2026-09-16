@@ -130,6 +130,8 @@ For detailed setup instructions, see the [Integration Guide](docs/INTEGRATION_GU
 - [ChatAppIPC](examples/ipc/ChatAppIPC/README.md) — streaming chat and live voice input through the service app
 - [AudioTranscriptionAppIPC](examples/ipc/AudioTranscriptionAppIPC/README.md) — file, streaming, and live audio
   transcription through the service app
+- [FoundryLocalLab](examples/ipc/FoundryLocalLab/README.md) — Compose workbench for model management,
+  configurable text and speech experiments, and runtime diagnostics through the service app
 
 ### Embedded mode
 
@@ -144,6 +146,7 @@ directory:
 ./gradlew :ApiExplorerAppIPC:assembleDebug
 ./gradlew :ChatAppIPC:assembleDebug
 ./gradlew :AudioTranscriptionAppIPC:assembleDebug
+./gradlew :FoundryLocalLab:assembleDebug
 ./gradlew :ChatAppEmbedded:assembleDebug
 ./gradlew :AudioTranscriptionAppEmbedded:assembleDebug
 ```
