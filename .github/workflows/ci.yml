@@ -143,3 +143,51 @@ jobs:
           if (Compare-Object $expectedProjects $actualProjects) {
             throw "Registered Gradle projects do not match the public allowlist.`nExpected:`n$($expectedProjects -join "`n")`nActual:`n$($actualProjects -join "`n")"
           }
+
+  sample-validation:
+    name: Build and test samples
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: microsoft
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
+
+      - name: Download and verify release SDKs
+        shell: pwsh
+        env:
+          SDK_VERSION: 0.1.6
+        run: |
+          $releaseBase = "https://github.com/microsoft/FoundryLocalAndroid/releases/download/v$env:SDK_VERSION"
+          $sdkDirectory = Join-Path $env:RUNNER_TEMP "foundry-local-sdk"
+          New-Item -ItemType Directory -Force -Path $sdkDirectory | Out-Null
+
+          foreach ($mode in @("ipc", "embedded")) {
+            $fileName = "foundry-local-$mode-sdk-$env:SDK_VERSION.aar"
+            $aarPath = Join-Path $sdkDirectory $fileName
+            $checksumPath = "$aarPath.sha256"
+            Invoke-WebRequest "$releaseBase/$fileName" -OutFile $aarPath
+            Invoke-WebRequest "$releaseBase/$fileName.sha256" -OutFile $checksumPath
+
+            $expectedHash = ((Get-Content $checksumPath -Raw).Trim() -split '\s+', 2)[0]
+            $actualHash = (Get-FileHash $aarPath -Algorithm SHA256).Hash
+            if ($actualHash -ne $expectedHash) {
+              throw "Checksum mismatch for $fileName."
+            }
+
+            Get-ChildItem "examples/$mode" -Directory |
+              Where-Object { Test-Path (Join-Path $_.FullName "build.gradle.kts") } |
+              ForEach-Object {
+                $libsDirectory = Join-Path $_.FullName "libs"
+                New-Item -ItemType Directory -Force -Path $libsDirectory | Out-Null
+                Copy-Item $aarPath $libsDirectory
+              }
+          }
+
+      - name: Test, lint, and build samples
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug --no-daemon
