@@ -30,6 +30,9 @@ include(":AudioTranscriptionAppIPC")
 project(":AudioTranscriptionAppIPC").projectDir =
     file("examples/ipc/AudioTranscriptionAppIPC")
 
+include(":FoundryLocalLab")
+project(":FoundryLocalLab").projectDir = file("examples/ipc/FoundryLocalLab")
+
 include(":ChatAppEmbedded")
 project(":ChatAppEmbedded").projectDir = file("examples/embedded/ChatAppEmbedded")
 

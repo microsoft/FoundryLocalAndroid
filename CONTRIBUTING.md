@@ -31,6 +31,7 @@ the `libs/` directory of each Embedded example.
 ./gradlew :ApiExplorerAppIPC:assembleDebug
 ./gradlew :ChatAppIPC:assembleDebug
 ./gradlew :AudioTranscriptionAppIPC:assembleDebug
+./gradlew :FoundryLocalLab:assembleDebug
 ./gradlew :ChatAppEmbedded:assembleDebug
 ./gradlew :AudioTranscriptionAppEmbedded:assembleDebug
 ```
