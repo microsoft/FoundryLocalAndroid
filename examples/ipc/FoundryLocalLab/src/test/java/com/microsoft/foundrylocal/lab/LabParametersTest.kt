@@ -57,10 +57,14 @@ class LabParametersTest {
         val chat = choice("qwen2.5-0.5b")
         val file = choice("whisper-tiny")
         val mic = choice("nemotron-speech-streaming-en-0.6b")
+        val spanishMic = choice("nemotron-speech-streaming-es-0.6b")
+        val streamingChat = choice("qwen-stream")
         assertTrue(LabInputMode.TEXT.accepts(chat))
         assertFalse(LabInputMode.FILE.accepts(chat))
         assertTrue(LabInputMode.FILE.accepts(file))
         assertFalse(LabInputMode.MICROPHONE.accepts(file))
         assertEquals(LabInputMode.MICROPHONE, LabInputMode.forModel(mic))
+        assertFalse(LabInputMode.MICROPHONE.accepts(spanishMic))
+        assertFalse(LabInputMode.MICROPHONE.accepts(streamingChat))
     }
 }

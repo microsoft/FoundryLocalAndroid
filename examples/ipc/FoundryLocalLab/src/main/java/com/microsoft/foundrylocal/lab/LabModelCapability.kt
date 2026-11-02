@@ -21,11 +21,15 @@ enum class LabModelCapability(val label: String) {
             val normalizedAlias = alias.trim().lowercase()
             return when {
                 normalizedAlias.contains("whisper") ||
-                    normalizedAlias.contains("nemotron") ||
+                    (normalizedAlias.contains("nemotron") && normalizedAlias.contains("speech")) ||
                     listOf("audio", "speech", "transcri").any(normalizedTask::contains) -> AUDIO
 
-                normalizedTask.isBlank() ||
-                    listOf("chat", "text", "completion", "generat").any(normalizedTask::contains) -> CHAT
+                listOf("embed", "rerank", "vision").any(normalizedAlias::contains) -> OTHER
+
+                listOf("chat", "text", "completion", "generat").any(normalizedTask::contains) -> CHAT
+
+                normalizedTask.isBlank() &&
+                    listOf("qwen", "phi-", "gemma", "llama", "mistral").any(normalizedAlias::contains) -> CHAT
 
                 else -> OTHER
             }

@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class LabModelChoice(
     val alias: String,
@@ -63,10 +64,11 @@ data class LabModelChoice(
         get() = LabModelCapability.classify(task, alias)
 
     val supportsFileTranscription: Boolean
-        get() = alias.contains("whisper", ignoreCase = true)
+        get() = capability == LabModelCapability.AUDIO && alias.contains("whisper", ignoreCase = true)
 
     val supportsLiveTranscription: Boolean
-        get() = alias.contains("stream", ignoreCase = true) || alias.contains("nemotron", ignoreCase = true)
+        get() = capability == LabModelCapability.AUDIO &&
+            alias.contains("nemotron-speech-streaming-en", ignoreCase = true)
 }
 
 enum class LabMessageRole {
@@ -77,7 +79,8 @@ enum class LabMessageRole {
 data class LabMessage(
     val role: LabMessageRole,
     val content: String,
-    val durationMs: Long? = null
+    val durationMs: Long? = null,
+    val includeInHistory: Boolean = true
 )
 
 data class LabUiState(
@@ -118,6 +121,7 @@ data class LabUiState(
     val streamingPartialText: String = "",
     val isTranscribing: Boolean = false,
     val isListening: Boolean = false,
+    val isStreamStopping: Boolean = false,
     val audioError: String? = null,
     val runtimeEvents: List<String> = emptyList(),
     val errorMessage: String? = null,
@@ -133,7 +137,7 @@ data class LabUiState(
         get() = availableModels.count { it.capability == LabModelCapability.AUDIO }
 
     val isCapabilityRunning: Boolean
-        get() = isGenerating || isTranscribing || isListening || isAudioFilePreparing
+        get() = isGenerating || isTranscribing || isListening || isStreamStopping || isAudioFilePreparing
 }
 
 /**
@@ -189,12 +193,22 @@ class LabViewModel : ViewModel() {
         connect(context)
     }
 
-    private fun connect(context: ComponentActivity) {
-        if (connectionJob?.isActive == true || manager?.isConnected == true) return
+    private fun connect(context: ComponentActivity, reconnecting: Boolean = false) {
+        if (connectionJob?.isActive == true || (!reconnecting && manager?.isConnected == true)) return
         appendEvent("Connecting to Foundry Local IPC service")
         _uiState.update { it.copy(isBusy = true, operationLabel = "Connecting") }
         connectionJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (reconnecting) {
+                    catalogJob?.cancelAndJoin()
+                    modelOperationJob?.cancelAndJoin()
+                    _uiState.update { it.copy(isBusy = true, operationLabel = "Connecting") }
+                    cancelCapabilityWorkAndJoin()
+                    model = null
+                    catalog = null
+                    chatClient = null
+                    audioClient = null
+                }
                 val currentManager = manager?.also { it.reconnect() } ?: FoundryLocalManager.create(
                     context = context,
                     config = Configuration(appName = "FoundryLocalLab", logLevel = "Information"),
@@ -222,14 +236,6 @@ class LabViewModel : ViewModel() {
 
     fun reconnect(context: ComponentActivity) {
         if (connectionJob?.isActive == true) return
-        cancelGeneration()
-        cancelTranscription()
-        stopLiveTranscription()
-        modelOperationJob?.cancel()
-        model = null
-        catalog = null
-        chatClient = null
-        audioClient = null
         _uiState.update {
             it.copy(
                 isConnected = false,
@@ -241,15 +247,17 @@ class LabViewModel : ViewModel() {
                 errorMessage = null
             )
         }
-        connect(context)
+        connect(context, reconnecting = true)
     }
 
     fun refreshCatalog() {
-        if (!_uiState.value.isConnected || catalogJob?.isActive == true || modelOperationJob != null) return
+        if (!_uiState.value.isConnected || _uiState.value.isBusy || catalogJob?.isActive == true || modelOperationJob != null) return
+        _uiState.update { it.copy(isBusy = true, operationLabel = "Refreshing catalog", isCatalogRefreshing = true) }
         catalogJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 refreshCatalogAndSelection()
             } finally {
+                _uiState.update { it.copy(isBusy = false, operationLabel = null, isCatalogRefreshing = false) }
                 catalogJob = null
             }
         }
@@ -326,15 +334,16 @@ class LabViewModel : ViewModel() {
             _uiState.update { it.copy(errorMessage = selected?.capability?.availabilityNote ?: "Model unavailable") }
             return
         }
-        if (modelOperationJob != null) {
+        if (state.isBusy || modelOperationJob != null || catalogJob?.isActive == true) {
             _uiState.update { it.copy(errorMessage = "Wait for the current model operation to finish.") }
             return
         }
+        _uiState.update { it.copy(isBusy = true, operationLabel = "Switching model", progressPercent = 0) }
         modelOperationJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isBusy = true, operationLabel = "Switching model", progressPercent = 0) }
             try {
                 cancelCapabilityWorkAndJoin()
-                model?.takeIf { it.isLoaded() }?.unload()
+                val previousModel = model ?: if (state.isLoaded) resolveSelectedModel() else null
+                if (previousModel != null && (state.isLoaded || previousModel.isLoaded())) previousModel.unload()
                 applySelection(alias)
                 refreshSelectedModelState()
                 _uiState.update { it.copy(successMessage = "Model switched safely. Load it when ready.") }
@@ -382,8 +391,7 @@ class LabViewModel : ViewModel() {
         val cached = FoundryModelIdentityResolver.isCached(
             selected = selected.identity(),
             cachedModels = cachedModels.map { it.identity() },
-            sdkReportsCached = currentModel.isCached(),
-            downloadConfirmed = false
+            sdkReportsCached = currentModel.isCached()
         )
         val loaded = currentModel.isLoaded() || loadedModels.any {
             FoundryModelIdentityResolver.isSameModel(selected.identity(), it.identity())
@@ -424,11 +432,9 @@ class LabViewModel : ViewModel() {
     fun downloadModel(context: ComponentActivity) {
         val state = _uiState.value
         if (!state.isConnected || state.selectedModelAlias.isBlank() || state.isDownloaded) return
-        if (modelOperationJob != null) return
+        if (state.isBusy || modelOperationJob != null || catalogJob?.isActive == true) return
+        _uiState.update { it.copy(isBusy = true, operationLabel = "Downloading model", progressPercent = 0, errorMessage = null) }
         modelOperationJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update {
-                it.copy(isBusy = true, operationLabel = "Downloading model", progressPercent = 0, errorMessage = null)
-            }
             try {
                 val currentModel = resolveSelectedModel()
                 currentModel.download(
@@ -445,8 +451,23 @@ class LabViewModel : ViewModel() {
                 appendEvent("Model download cancelled")
                 throw cancelled
             } catch (error: Exception) {
-                _uiState.update { it.copy(errorMessage = "Model download failed: ${error.userMessage()}") }
-                appendEvent("Model download failed: ${error.userMessage()}")
+                // A late callback may fail after the service has cached the model. Progress alone
+                // is not proof of completion; reconcile against the service before allowing load.
+                val reportedError = error.userMessage()
+                try {
+                    refreshSelectedModelState()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (refreshError: Exception) {
+                    appendEvent("Download state refresh failed: ${refreshError.userMessage()}")
+                }
+                if (_uiState.value.isDownloaded) {
+                    _uiState.update { it.copy(errorMessage = null, successMessage = "Model is cached despite a download callback error.") }
+                    appendEvent("Download reported an error, but the service confirms the model is cached: $reportedError")
+                } else {
+                    _uiState.update { it.copy(errorMessage = "Model download failed: $reportedError") }
+                    appendEvent("Model download failed: $reportedError")
+                }
             } finally {
                 finishModelOperation()
             }
@@ -457,9 +478,9 @@ class LabViewModel : ViewModel() {
         val state = _uiState.value
         val selected = state.selectedModel ?: return
         if (!state.isConnected || !state.isDownloaded || !selected.capability.isRunnableInCurrentBuild) return
-        if (modelOperationJob != null) return
+        if (state.isBusy || modelOperationJob != null || catalogJob?.isActive == true) return
+        _uiState.update { it.copy(isBusy = true, operationLabel = "Loading model", progressPercent = 0, errorMessage = null) }
         modelOperationJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isBusy = true, operationLabel = "Loading model", progressPercent = 0, errorMessage = null) }
             try {
                 val currentCatalog = catalog ?: throw IllegalStateException("Catalog unavailable")
                 val currentSelection = _uiState.value.selectedModel
@@ -502,9 +523,9 @@ class LabViewModel : ViewModel() {
     }
 
     fun unloadModel() {
-        if (!_uiState.value.isLoaded || modelOperationJob != null) return
+        if (!_uiState.value.isLoaded || _uiState.value.isBusy || modelOperationJob != null || catalogJob?.isActive == true) return
+        _uiState.update { it.copy(isBusy = true, operationLabel = "Unloading model", progressPercent = 0) }
         modelOperationJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isBusy = true, operationLabel = "Unloading model", progressPercent = 0) }
             try {
                 cancelCapabilityWorkAndJoin()
                 resolveSelectedModel().unload()
@@ -534,9 +555,9 @@ class LabViewModel : ViewModel() {
 
     fun removeModelFromCache() {
         val state = _uiState.value
-        if (!state.isConnected || !state.isDownloaded || state.isLoaded || modelOperationJob != null) return
+        if (!state.isConnected || !state.isDownloaded || state.isLoaded || state.isBusy || modelOperationJob != null || catalogJob?.isActive == true) return
+        _uiState.update { it.copy(isBusy = true, operationLabel = "Removing cached model", progressPercent = 0) }
         modelOperationJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isBusy = true, operationLabel = "Removing cached model", progressPercent = 0) }
             try {
                 resolveSelectedModel().removeFromCache()
                 model = null
@@ -614,7 +635,7 @@ class LabViewModel : ViewModel() {
         generationJob = viewModelScope.launch(Dispatchers.IO) {
             val accumulated = StringBuilder()
             try {
-                val history = existing.map { message ->
+                val history = existing.filter { it.includeInHistory }.map { message ->
                     when (message.role) {
                         LabMessageRole.USER -> ChatMessage.user(message.content)
                         LabMessageRole.ASSISTANT -> ChatMessage.assistant(message.content)
@@ -639,10 +660,14 @@ class LabViewModel : ViewModel() {
                 _uiState.update { current ->
                     val messages = current.messages.toMutableList()
                     if (assistantIndex in messages.indices) {
+                        if (accumulated.isBlank()) {
+                            messages[assistantIndex - 1] = messages[assistantIndex - 1].copy(includeInHistory = false)
+                        }
                         messages[assistantIndex] = LabMessage(
                             LabMessageRole.ASSISTANT,
                             accumulated.toString().ifBlank { "(empty response)" },
-                            duration
+                            duration,
+                            includeInHistory = accumulated.isNotBlank()
                         )
                     }
                     current.copy(
@@ -658,10 +683,12 @@ class LabViewModel : ViewModel() {
                 _uiState.update { current ->
                     val messages = current.messages.toMutableList()
                     if (assistantIndex in messages.indices) {
+                        messages[assistantIndex - 1] = messages[assistantIndex - 1].copy(includeInHistory = false)
                         messages[assistantIndex] = LabMessage(
                             LabMessageRole.ASSISTANT,
                             accumulated.toString().ifBlank { "Generation cancelled." },
-                            duration
+                            duration,
+                            includeInHistory = false
                         )
                     }
                     current.copy(messages = messages, isGenerating = false, lastInferenceDurationMs = duration)
@@ -673,10 +700,12 @@ class LabViewModel : ViewModel() {
                 _uiState.update { current ->
                     val messages = current.messages.toMutableList()
                     if (assistantIndex in messages.indices) {
+                        messages[assistantIndex - 1] = messages[assistantIndex - 1].copy(includeInHistory = false)
                         messages[assistantIndex] = LabMessage(
                             LabMessageRole.ASSISTANT,
                             accumulated.toString().ifBlank { "Error: ${error.userMessage()}" },
-                            duration
+                            duration,
+                            includeInHistory = false
                         )
                     }
                     current.copy(
@@ -860,7 +889,8 @@ class LabViewModel : ViewModel() {
             _uiState.update { it.copy(audioError = "Choose a Nemotron streaming model for the microphone.") }
             return
         }
-        if (_uiState.value.isListening || streamSetupJob?.isActive == true) return
+        if (_uiState.value.isListening || _uiState.value.isStreamStopping || streamState != null ||
+            streamSetupJob?.isActive == true || streamCleanupJob?.isActive == true) return
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             _uiState.update { it.copy(audioError = "Microphone permission is required.") }
             return
@@ -910,11 +940,19 @@ class LabViewModel : ViewModel() {
                     try {
                         while (isCaptureActive.get()) {
                             val bytesRead = recorder.read(buffer, 0, buffer.size)
-                            if (bytesRead < 0) throw IllegalStateException("AudioRecord.read() failed: $bytesRead")
+                            if (bytesRead < 0 && isCaptureActive.get()) {
+                                throw IllegalStateException("AudioRecord.read() failed: $bytesRead")
+                            }
                             if (bytesRead > 0) channel.send(buffer.copyOf(bytesRead))
                         }
-                    } finally {
                         channel.close()
+                    } catch (cancelled: CancellationException) {
+                        channel.close()
+                        throw cancelled
+                    } catch (error: Exception) {
+                        channel.close(error)
+                    } finally {
+                        isCaptureActive.set(false)
                     }
                 }
 
@@ -928,6 +966,7 @@ class LabViewModel : ViewModel() {
                             }
                         }
                     } catch (cancelled: CancellationException) {
+                        streamError = IllegalStateException("Audio processing was interrupted before all queued audio was sent.")
                         throw cancelled
                     } catch (error: Exception) {
                         streamError = error
@@ -935,27 +974,17 @@ class LabViewModel : ViewModel() {
                     } finally {
                         isCaptureActive.set(false)
                         releaseRecorder(recorder)
-                        val result = runCatching {
-                            withContext(NonCancellable) { finalizeSession(state) }
-                        }.onFailure { Log.e(TAG, "Live stream finalization failed", it) }.getOrNull()
-                        withContext(NonCancellable + Dispatchers.Main) {
-                            _uiState.update {
-                                it.copy(
-                                    transcriptionText = result?.text?.takeIf(String::isNotBlank)
-                                        ?.let(::normalizeTranscript)
-                                        ?: it.streamingPartialText,
-                                    streamingPartialText = "",
-                                    isListening = false,
-                                    audioDurationMs = SystemClock.elapsedRealtime() - startedAt,
-                                    audioError = streamError?.userMessage()
-                                )
+                        withContext(NonCancellable) {
+                            val captureStopped = withTimeoutOrNull(3_000) { captureJob?.cancelAndJoin(); true } == true
+                            if (captureStopped) {
+                                finishStream(state, startedAt, streamError)
+                            } else {
+                                _uiState.update {
+                                    it.copy(isListening = true, audioError = "Microphone capture is still stopping. Try Stop again.")
+                                }
+                                appendEvent("Microphone capture did not stop in time")
                             }
-                            if (streamState === state) streamState = null
-                            captureJob = null
-                            pushJob = null
-                            audioChunks = null
                         }
-                        appendEvent("Live transcription stopped")
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -963,7 +992,13 @@ class LabViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 releaseRecorder()
-                _uiState.update { it.copy(isListening = false, audioError = error.userMessage()) }
+                audioChunks?.close()
+                val state = streamState
+                if (state != null) {
+                    withContext(NonCancellable) { finishStream(state, startedAt, error) }
+                } else {
+                    _uiState.update { it.copy(isListening = false, audioError = error.userMessage()) }
+                }
                 appendEvent("Live transcription failed: ${error.userMessage()}")
             } finally {
                 streamSetupJob = null
@@ -972,29 +1007,74 @@ class LabViewModel : ViewModel() {
     }
 
     fun stopLiveTranscription() {
-        val state = streamState
-        if (!_uiState.value.isListening && state == null && streamSetupJob?.isActive != true) return
+        if (!_uiState.value.isListening && streamState == null && streamSetupJob?.isActive != true) return
+        if (_uiState.value.isStreamStopping || streamCleanupJob?.isActive == true) return
+        _uiState.update { it.copy(isStreamStopping = true) }
         isCaptureActive.set(false)
         releaseRecorder()
         runCatching { audioChunks?.close() }
         val setupJob = streamSetupJob
-        streamSetupJob = null
-        if (streamCleanupJob?.isActive == true) return
         streamCleanupJob = viewModelScope.launch(Dispatchers.IO) {
-            runCatching { setupJob?.cancelAndJoin() }
-            runCatching { captureJob?.cancelAndJoin() }
-            runCatching { pushJob?.join() }
-            val currentState = streamState
-            if (currentState != null) {
-                runCatching { withContext(NonCancellable) { finalizeSession(currentState) } }
-                    .onFailure { Log.e(TAG, "Failed to stop live stream", it) }
-                if (streamState === currentState && currentState.finalized.get()) streamState = null
-            }
-            withContext(NonCancellable + Dispatchers.Main) {
-                _uiState.update { it.copy(isListening = false) }
+            try {
+                val setupStopped = withTimeoutOrNull(3_000) { setupJob?.cancelAndJoin(); true } == true
+                if (!setupStopped) throw IllegalStateException("Microphone setup is still stopping. Try again.")
+                val capture = captureJob
+                val captureStopped = withTimeoutOrNull(3_000) { capture?.cancelAndJoin(); true } == true
+                if (!captureStopped) throw IllegalStateException("Microphone capture is still stopping. Try again.")
+                val push = pushJob
+                if (push != null) {
+                    val alreadyStopped = push.isCompleted
+                    // Give queued chunks a short opportunity to drain, then cancel a stuck IPC call.
+                    if (withTimeoutOrNull(3_000) { push.join(); true } != true) {
+                        push.cancel()
+                        if (withTimeoutOrNull(3_000) { push.join(); true } != true) {
+                            throw IllegalStateException("Audio processing is still stopping. Try again.")
+                        }
+                    }
+                    pushJob = null
+                    if (alreadyStopped) streamState?.let { finishStream(it, null, null) }
+                } else {
+                    streamState?.let { finishStream(it, null, null) }
+                }
+                if (streamState == null) _uiState.update { it.copy(isListening = false) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isListening = true, audioError = error.userMessage()) }
+                appendEvent("Live transcription cleanup failed: ${error.userMessage()}")
+            } finally {
+                _uiState.update { it.copy(isStreamStopping = false) }
                 streamCleanupJob = null
             }
         }
+    }
+
+    private suspend fun finishStream(state: StreamState, startedAt: Long?, streamError: Exception?) {
+        val result = try {
+            finalizeSession(state)
+        } catch (error: Exception) {
+            Log.e(TAG, "Live stream finalization failed", error)
+            _uiState.update {
+                it.copy(isListening = true, audioError = "Could not stop live transcription: ${error.userMessage()}. Try Stop again.")
+            }
+            appendEvent("Live stream finalization failed: ${error.userMessage()}")
+            return
+        }
+        if (streamState === state) streamState = null
+        captureJob = null
+        audioChunks = null
+        _uiState.update {
+            it.copy(
+                transcriptionText = result?.text?.takeIf(String::isNotBlank)?.let(::normalizeTranscript)
+                    ?: it.streamingPartialText,
+                streamingPartialText = "",
+                isListening = false,
+                audioDurationMs = startedAt?.let { start -> SystemClock.elapsedRealtime() - start } ?: it.audioDurationMs,
+                audioError = streamError?.userMessage()
+            )
+        }
+        if (streamError != null) appendEvent("Live transcription failed: ${streamError.userMessage()}")
+        else appendEvent("Live transcription stopped")
     }
 
     fun clearAudioResult() {
@@ -1012,9 +1092,12 @@ class LabViewModel : ViewModel() {
         val fileJob = transcriptionJob
         transcriptionJob = null
         fileJob?.cancelAndJoin()
-        if (_uiState.value.isListening || streamState != null) {
+        if (_uiState.value.isListening || streamState != null || streamSetupJob?.isActive == true || streamCleanupJob?.isActive == true) {
             stopLiveTranscription()
             streamCleanupJob?.join()
+            if (streamState != null || streamSetupJob?.isActive == true || pushJob?.isActive == true) {
+                throw IllegalStateException("Stop the live transcription session before continuing.")
+            }
         }
     }
 
@@ -1028,7 +1111,9 @@ class LabViewModel : ViewModel() {
 
     private fun handleDisconnected(message: String) {
         generationJob?.cancel()
+        filePreparationJob?.cancel()
         transcriptionJob?.cancel()
+        catalogJob?.cancel()
         modelOperationJob?.cancel()
         stopLiveTranscription()
         model = null
@@ -1047,7 +1132,6 @@ class LabViewModel : ViewModel() {
                 activeModelAlias = null,
                 isGenerating = false,
                 isTranscribing = false,
-                isListening = false,
                 errorMessage = message
             )
         }

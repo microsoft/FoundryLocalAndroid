@@ -449,7 +449,7 @@ private fun ModelsWorkspace(
             )
             Spacer(modifier = Modifier.height(10.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CatalogFilter.values().filter { it != CatalogFilter.FILE && it != CatalogFilter.MICROPHONE || it == filter }.forEach { item ->
+                CatalogFilter.values().forEach { item ->
                     FilterChip(
                         selected = filter == item,
                         onClick = { onFilterChange(item) },
@@ -592,7 +592,7 @@ private fun SelectedModelControl(
             }
             Button(
                 onClick = action,
-                enabled = !state.isBusy && selected?.capability?.isRunnableInCurrentBuild == true,
+                enabled = !state.isBusy && (!state.isConnected || selected?.capability?.isRunnableInCurrentBuild == true),
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = LabAccent, contentColor = Color(0xFF00242C)),
                 shape = RoundedCornerShape(12.dp)

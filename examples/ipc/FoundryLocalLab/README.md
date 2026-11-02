@@ -83,8 +83,8 @@ capture. Model availability and performance depend on the device and service cat
   model, and clears its client. Loading also unloads other active models reported by the service.
   This sample is intended for one active experiment at a time; do not run it alongside another client
   that needs its loaded model to remain active.
-- The catalog alias is used for display and selection; lifecycle operations resolve canonical model
-  identifiers so cached-model checks, loading, unloading, and removal address the same service record.
+- The catalog alias is used for selection and model lookup; additional identity fields help match
+  records returned by the service when checking cached and loaded models.
 - Reconnection reacquires catalog, model, and client handles. Cancellation is preserved rather than
   reported as a successful inference.
 - Chat history and transcripts are in memory. Selected audio files are copied to the app's private
@@ -95,12 +95,14 @@ capture. Model availability and performance depend on the device and service cat
 
 ## Validation and limitations
 
-The sample includes 17 JVM tests for model identity resolution, capability classification, and
+The sample includes JVM tests for model identity resolution, capability classification, and
 parameter validation/request mapping. These are not instrumented UI or service-integration tests.
 
-Manual device validation on 10 September 2026 used a Samsung Galaxy S24 and the public 0.1.6 IPC
-SDK/service: Qwen 0.5B text generation and a Nemotron English microphone transcription completed.
-Whisper file transcription is implemented but has not yet been exercised end-to-end in this sample.
+Manual device validation on 2 November 2026 used a Samsung Galaxy S24 running Android 17 and the
+public 0.1.6 IPC SDK/service. Qwen 0.5B text generation, Nemotron English microphone transcription,
+and Whisper Tiny file transcription in complete and streaming modes produced results. The test also
+covered catalog filters, model switching, a normal model download, and reconnecting after the
+service was stopped.
 The microphone UI shows the latest partial chunk while listening; stop requests the finalized
 transcript. Long sessions, reconnection during capture, and a wider device matrix need further
 validation. The sample is not a production-ready reference or a performance benchmark.

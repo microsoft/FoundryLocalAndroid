@@ -10,7 +10,7 @@ data class FoundryModelIdentity(
 
 object FoundryModelIdentityResolver {
     fun catalogId(identity: FoundryModelIdentity): String =
-        identity.name.trim().ifBlank { identity.alias.trim() }
+        identity.alias.trim()
 
     fun isSameModel(first: FoundryModelIdentity, second: FoundryModelIdentity): Boolean {
         val firstVersion = versionKey(first)
@@ -26,9 +26,8 @@ object FoundryModelIdentityResolver {
     fun isCached(
         selected: FoundryModelIdentity,
         cachedModels: List<FoundryModelIdentity>,
-        sdkReportsCached: Boolean,
-        downloadConfirmed: Boolean
-    ): Boolean = sdkReportsCached || downloadConfirmed || cachedModels.any { isSameModel(selected, it) }
+        sdkReportsCached: Boolean
+    ): Boolean = sdkReportsCached || cachedModels.any { isSameModel(selected, it) }
 
     fun preferredAlias(
         candidates: List<FoundryModelIdentity>,
@@ -41,16 +40,6 @@ object FoundryModelIdentityResolver {
             isSameModel(it, FoundryModelIdentity(alias = fallbackAlias))
         }?.alias
         ?: candidates.firstOrNull()?.alias.orEmpty()
-
-    fun isUsableDownload(successful: Boolean, progressPercent: Int): Boolean =
-        successful || progressPercent >= 99
-
-    fun shouldRevalidateActiveModel(
-        isCached: Boolean,
-        sdkReportsLoaded: Boolean,
-        activeReceiptMatches: Boolean,
-        sessionAlreadyValidated: Boolean
-    ): Boolean = isCached && activeReceiptMatches && !sdkReportsLoaded && !sessionAlreadyValidated
 
     private fun identityKeys(identity: FoundryModelIdentity): Set<String> = buildSet {
         addIdentityValue(identity.alias)

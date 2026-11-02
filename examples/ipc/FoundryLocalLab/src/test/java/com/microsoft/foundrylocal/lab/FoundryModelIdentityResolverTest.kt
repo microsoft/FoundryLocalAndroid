@@ -6,13 +6,13 @@ import org.junit.Test
 
 class FoundryModelIdentityResolverTest {
     @Test
-    fun `catalog lookup uses canonical model name instead of display alias`() {
+    fun `catalog lookup uses the documented model alias`() {
         val identity = FoundryModelIdentity(
             alias = "qwen2.5-0.5b-instruct-generic-cpu",
             name = "qwen2.5-0.5b-instruct-generic-cpu:4"
         )
 
-        assertTrue(FoundryModelIdentityResolver.catalogId(identity) == identity.name)
+        assertTrue(FoundryModelIdentityResolver.catalogId(identity) == identity.alias)
     }
 
     @Test
@@ -74,21 +74,4 @@ class FoundryModelIdentityResolverTest {
         )
     }
 
-    @Test
-    fun `completed files remain a usable download despite final callback error`() {
-        assertTrue(FoundryModelIdentityResolver.isUsableDownload(false, 99))
-        assertFalse(FoundryModelIdentityResolver.isUsableDownload(false, 72))
-    }
-
-    @Test
-    fun `validated session does not reload on catalog refresh`() {
-        assertFalse(
-            FoundryModelIdentityResolver.shouldRevalidateActiveModel(
-                isCached = true,
-                sdkReportsLoaded = false,
-                activeReceiptMatches = true,
-                sessionAlreadyValidated = true
-            )
-        )
-    }
 }

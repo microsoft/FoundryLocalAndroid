@@ -203,7 +203,9 @@ internal fun LabPlayground(
                         }
                         LabInputMode.MICROPHONE -> {
                             Text(
-                                if (state.isListening) "Listening. Stop to finalize the transcript."
+                                if (state.isStreamStopping) "Stopping and finalizing the transcript."
+                                else if (state.isListening && state.audioError != null) "The session needs attention. Press Stop to retry cleanup."
+                                else if (state.isListening) "Listening. Stop to finalize the transcript."
                                 else "Use your microphone to transcribe speech. Recording starts when you press Run on device.",
                                 color = LabMuted
                             )
@@ -276,7 +278,7 @@ internal fun LabPlayground(
                             else -> run()
                         }
                     },
-                    enabled = stoppable || ready && valid && hasInput && !working,
+                    enabled = !state.isStreamStopping && (stoppable || ready && valid && hasInput && !working),
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = if (stoppable) Color(0xFF8F2D35) else LabAccent, contentColor = if (stoppable) Color.White else Color(0xFF00242C)),
                     shape = RoundedCornerShape(12.dp)
@@ -284,6 +286,7 @@ internal fun LabPlayground(
                     Icon(if (stoppable) Icons.Rounded.Stop else if (mode == LabInputMode.MICROPHONE) Icons.Rounded.Mic else Icons.Rounded.AutoAwesome, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(when {
+                        state.isStreamStopping -> "Stopping"
                         state.isListening -> "Stop and finalize"
                         state.isTranscribing -> "Stop transcription"
                         state.isGenerating -> "Stop generation"
