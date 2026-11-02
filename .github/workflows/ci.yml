@@ -83,7 +83,8 @@ jobs:
             "examples/embedded/ChatAppEmbedded/build.gradle.kts",
             "examples/ipc/ApiExplorerAppIPC/build.gradle.kts",
             "examples/ipc/ChatAppIPC/build.gradle.kts",
-            "examples/ipc/AudioTranscriptionAppIPC/build.gradle.kts"
+            "examples/ipc/AudioTranscriptionAppIPC/build.gradle.kts",
+            "examples/ipc/FoundryLocalLab/build.gradle.kts"
           )
           $repositoryRoot = (Get-Location).Path
           $actualBuildFiles = @(
@@ -101,6 +102,7 @@ jobs:
             ":ApiExplorerAppIPC" = "examples/ipc/ApiExplorerAppIPC"
             ":ChatAppIPC" = "examples/ipc/ChatAppIPC"
             ":AudioTranscriptionAppIPC" = "examples/ipc/AudioTranscriptionAppIPC"
+            ":FoundryLocalLab" = "examples/ipc/FoundryLocalLab"
             ":AudioTranscriptionAppEmbedded" = "examples/embedded/AudioTranscriptionAppEmbedded"
             ":ChatAppEmbedded" = "examples/embedded/ChatAppEmbedded"
           }
